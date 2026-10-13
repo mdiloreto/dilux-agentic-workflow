@@ -39,6 +39,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Never
 
 try:
     import yaml
@@ -309,9 +310,79 @@ def _tap_copilot(repo: Path) -> int:
     return tapped
 
 
+# --------------------------------------------------------------------------- #
+# the tap — Codex CLI (shell hooks with apply_patch programs)
+# --------------------------------------------------------------------------- #
+
+CODEX_TAP = r'''#!/usr/bin/env bash
+# The extra descriptor keeps stdin byte-identical, including trailing newlines,
+# without putting a potentially large patch into an environment variable.
+python3 - "$(dirname "$0")/__REAL__" "__NAME__" 3<&0 <<'PY'
+import json
+import os
+import subprocess
+import sys
+
+with os.fdopen(3, "rb") as stream:
+    payload = stream.read()
+# Inherited output descriptors keep the adapter's stdout and stderr separate.
+result = subprocess.run(["bash", sys.argv[1]], input=payload)
+try:
+    event = json.loads(payload)
+except (ValueError, UnicodeDecodeError):
+    event = {}
+event = event if isinstance(event, dict) else {}
+args = event.get("tool_input")
+args = args if isinstance(args, dict) else {}
+paths = [args.get(key) for key in
+         ("file_path", "notebook_path", "path", "filePath", "file", "absolute_path")]
+paths = [path for path in paths if isinstance(path, str) and path]
+command = args.get("command")
+if not paths and event.get("tool_name") == "apply_patch" and isinstance(command, str):
+    # These are the shared gate's patch headers, including both rename paths.
+    markers = ("*** Add File: ", "*** Update File: ", "*** Delete File: ", "*** Move to: ")
+    for line in command.splitlines():
+        line = line.strip()
+        for marker in markers:
+            if line.startswith(marker) and line[len(marker):].strip():
+                paths.append(line[len(marker):].strip())
+rows = [{"hook": sys.argv[2], "exit": result.returncode,
+         "tool": event.get("tool_name"), "path": path,
+         # DAW denies with exit 2; post hooks cannot undo a completed write.
+         "refused": sys.argv[2] == "pre-tool-use.sh" and result.returncode == 2}
+        for path in dict.fromkeys(paths or [None])]
+try:
+    with open(__LOG__, "a", encoding="utf-8") as log:
+        log.write("".join(json.dumps(row) + "\n" for row in rows))
+except OSError as exc:
+    print(f"DDW eval tap could not record a verdict: {exc}", file=sys.stderr)
+sys.exit(result.returncode if result.returncode >= 0 else 128 - result.returncode)
+PY
+'''
+
+
+def _tap_codex(repo: Path) -> int:
+    hooks = repo / ".codex" / "hooks" / "ddw"
+    tapped = 0
+    for name in ("pre-tool-use.sh", "post-write.sh"):
+        src = hooks / name
+        if not src.is_file():
+            continue
+        real = hooks / (name[:-3] + ".real.sh")
+        src.rename(real)
+        body = (CODEX_TAP.replace("__REAL__", real.name).replace("__NAME__", name)
+                .replace("__LOG__", repr(str((repo / ".ddw-eval-verdicts.jsonl").resolve()))))
+        src.write_text(body, encoding="utf-8")
+        src.chmod(0o755)
+        tapped += 1
+    if tapped:
+        reseal_manifest(repo, {".codex/hooks/ddw/pre-tool-use.sh", ".codex/hooks/ddw/post-write.sh"})
+    return tapped
+
+
 def install_verdict_tap(repo: Path) -> int:
     """Wrap whichever adapter this repo was installed with. Never judges."""
-    tapped = _tap_claude(repo) + _tap_opencode(repo) + _tap_copilot(repo)
+    tapped = _tap_claude(repo) + _tap_opencode(repo) + _tap_copilot(repo) + _tap_codex(repo)
     if tapped == 0:
         raise RuntimeError("verdict tap installed nothing — refusing to judge blind")
     return tapped
@@ -375,6 +446,15 @@ AGENT_CLIS = {
         "env": {"HOME": "{home}"},
         "prompt": ["-p", "{turn}"],
     },
+    "codex": {
+        "argv": ["codex", "exec"],
+        # Fixture hooks are vetted before bypassing their persisted trust prompt,
+        # NOT approvals or the sandbox. The flag applies to all enabled hooks;
+        # callers isolate other user hook sources with a dedicated CODEX_HOME.
+        "flags": ["--json", "--ignore-user-config", "--dangerously-bypass-hook-trust"],
+        "model": ["--model", "{model}"],
+        "prompt": ["{turn}"],
+    },
 }
 
 
@@ -388,6 +468,8 @@ def agent_profile(agent_cmd) -> tuple[str, dict]:
 def agent_turn_cmd(agent_cmd, model, session, turn, repo=None, home=None):
     """-> (name, argv, env). `env` is None when the agent needs no override."""
     name, prof = agent_profile(agent_cmd)
+    if name == "codex":
+        return _codex_turn_cmd(agent_cmd, model, session, turn, repo)
     # `--agent opencode` names the binary; the headless entry point is the
     # `run` SUBCOMMAND (bare `opencode` opens the TUI and the flags below are
     # rejected). Added only if the caller did not already spell it out.
@@ -422,11 +504,170 @@ def agent_turn_cmd(agent_cmd, model, session, turn, repo=None, home=None):
     return name, cmd, env
 
 
+def _codex_turn_cmd(agent_cmd: list[str], model: str | None, session: str | None,
+                    turn: str, repo: Path | str | None) -> tuple[str, list[str], dict[str, str]]:
+    if not repo:
+        raise RuntimeError("codex: a fixture root is required to trust and load its hooks")
+    if agent_cmd[1:] not in ([], ["exec"]):
+        raise RuntimeError("codex: use the binary or 'codex exec'; the harness controls headless "
+                           "options so caller flags cannot disable the sandbox or hooks")
+    root = str(Path(repo).resolve())
+    cmd = list(agent_cmd)
+    if cmd[-1] == "exec":
+        cmd.pop()
+    # Resume does not accept --sandbox or --cd. Config overrides apply to both
+    # entry points, and run_behavioral supplies cwd for every invocation.
+    cmd += ["-c", 'approval_policy="never"', "-c", 'sandbox_mode="workspace-write"',
+            "-c", f'projects.{json.dumps(root)}.trust_level="trusted"', "exec"]
+    if session:
+        cmd.append("resume")
+    else:
+        cmd += ["--sandbox", "workspace-write", "--cd", root]
+    profile = AGENT_CLIS["codex"]
+    cmd += profile["flags"]
+    if model:
+        cmd += [part.format(model=model) for part in profile["model"]]
+    cmd += ["--", session, turn] if session else ["--", turn]
+    # CODEX_HOME is caller-owned: CI can isolate auth, sessions, and user hooks
+    # without this harness reading or copying credentials. Ignoring config.toml
+    # alone is not a promise that all user/system hook sources are disabled.
+    return "codex", cmd, dict(os.environ, PWD=root)
+
+
 _OC_SESSION = re.compile(r'"sessionID"\s*:\s*"([^"]+)"')
+
+
+def _codex_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON key")
+        result[key] = value
+    return result
+
+
+def _codex_json_constant(value: str) -> Never:
+    raise ValueError(f"non-JSON constant {value}")
+
+
+def _codex_turn_read(stdout: str) -> tuple[list[dict], str | None, str | None]:
+    """Read one complete exec turn; malformed output belongs to the harness."""
+    events: list[dict] = []
+    session = None
+    started = completed = answered = False
+    pending: dict[str, str] = {}
+    finished: set[str] = set()
+
+    def invalid(reason: str) -> tuple[list[dict], str | None, str]:
+        # Control mode already recognizes this prefix as an instrument failure,
+        # not evidence that the scenario detected its regression.
+        return events, session, "the agent returned output this runner cannot parse: codex " + reason
+
+    for number, line in enumerate(stdout.splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line, object_pairs_hook=_codex_json_object,
+                               parse_constant=_codex_json_constant)
+        except ValueError:
+            return invalid(f"malformed JSONL on line {number}")
+        if not isinstance(event, dict) or not isinstance(event.get("type"), str):
+            return invalid(f"invalid event envelope on line {number}")
+        events.append(event)
+        if event["type"] in ("error", "turn.failed"):
+            return events, session, f"the agent reported an error: {json.dumps(event)[:200]}"
+        if completed:
+            return invalid("events follow turn.completed")
+        match event["type"]:
+            case "thread.started":
+                thread_id = event.get("thread_id")
+                if session is not None or not isinstance(thread_id, str) or not thread_id.strip():
+                    return invalid("missing, non-string, or ambiguous thread id")
+                session = thread_id
+            case "turn.started":
+                if not session or started:
+                    return invalid("missing thread or repeated turn.started")
+                started = True
+            case "item.started" | "item.updated" | "item.completed":
+                item = event.get("item")
+                if not started or not _codex_item_valid(item):
+                    return invalid(f"invalid item event on line {number}")
+                item_id, item_type = item["id"], item["type"]
+                if item_type == "error":
+                    return events, session, f"the agent reported an error: {item['message'][:200]}"
+                if item_id in finished or pending.get(item_id, item_type) != item_type:
+                    return invalid("duplicate item or changed item type")
+                if event["type"] == "item.completed":
+                    if item.get("status") == "in_progress":
+                        return invalid("completed item is still in progress")
+                    pending.pop(item_id, None)
+                    finished.add(item_id)
+                    answered |= item_type == "agent_message" and bool(item["text"].strip())
+                else:
+                    if event["type"] == "item.started" and item_id in pending:
+                        return invalid("repeated item.started")
+                    pending[item_id] = item_type
+            case "turn.completed":
+                usage = event.get("usage")
+                counters = ("input_tokens", "cached_input_tokens", "output_tokens")
+                if (not started or pending or not answered or not isinstance(usage, dict)
+                        or any(type(usage.get(key)) is not int or usage[key] < 0 for key in counters)
+                        or any(type(value) is not int or value < 0 for value in usage.values())):
+                    return invalid("incomplete/empty turn or invalid usage")
+                completed = True
+            case _:
+                return invalid(f"unknown event type on line {number}")
+    if not session or not completed:
+        return invalid("no thread id or completed turn")
+    return events, session, None
+
+
+def _codex_item_valid(item: object) -> bool:
+    """Validate the exec item schema without treating a refused tool as a crash."""
+    if not isinstance(item, dict) or not isinstance(item.get("id"), str) or not item["id"].strip():
+        return False
+    match item.get("type"):
+        case "agent_message" | "reasoning":
+            return isinstance(item.get("text"), str)
+        case "error":
+            return isinstance(item.get("message"), str)
+        case "command_execution":
+            return (all(isinstance(item.get(key), str) for key in ("command", "aggregated_output"))
+                    and (item.get("exit_code") is None or type(item["exit_code"]) is int)
+                    and item.get("status") in ("in_progress", "completed", "failed", "declined"))
+        case "file_change":
+            changes = item.get("changes")
+            return (item.get("status") in ("in_progress", "completed", "failed")
+                    and isinstance(changes, list)
+                    and all(isinstance(change, dict) and isinstance(change.get("path"), str)
+                            and change.get("kind") in ("add", "delete", "update") for change in changes))
+        case "mcp_tool_call":
+            return (all(isinstance(item.get(key), str) for key in ("server", "tool"))
+                    and item.get("status") in ("in_progress", "completed", "failed")
+                    and all(item.get(key) is None or isinstance(item[key], dict)
+                            for key in ("result", "error")))
+        case "collab_tool_call":
+            return (item.get("tool") in ("spawn_agent", "send_input", "wait", "close_agent")
+                    and isinstance(item.get("sender_thread_id"), str)
+                    and isinstance(item.get("receiver_thread_ids"), list)
+                    and all(isinstance(value, str) for value in item["receiver_thread_ids"])
+                    and isinstance(item.get("agents_states"), dict)
+                    and item.get("status") in ("in_progress", "completed", "failed"))
+        case "web_search":
+            return isinstance(item.get("query"), str) and isinstance(item.get("action"), dict)
+        case "todo_list":
+            todos = item.get("items")
+            return (isinstance(todos, list)
+                    and all(isinstance(todo, dict) and isinstance(todo.get("text"), str)
+                            and type(todo.get("completed")) is bool for todo in todos))
+        case _:
+            return False
 
 
 def agent_turn_read(name, stdout):
     """-> (payload, session_id, error_or_None). Never turns a crash into a pass."""
+    if name == "codex":
+        return _codex_turn_read(stdout)
     if name == "claude":
         try:
             payload = json.loads(stdout)
@@ -927,6 +1168,8 @@ def run_method_lint(sc, ddw_root, repo, control=False):
 # --------------------------------------------------------------------------- #
 
 def run_behavioral(sc, ddw_root, repo, agent_cmd, model):
+    if not sc["when"]["turns"] and Path(agent_cmd[0]).name == "codex":
+        return ERROR, "the agent did not complete a turn: codex scenario declares no turns"
     install_verdict_tap(repo)
     ctx = sc["given"].get("context_file")
     if ctx:
@@ -969,9 +1212,12 @@ def run_behavioral(sc, ddw_root, repo, agent_cmd, model):
             why = " | ".join((errs or said)[-2:])[:600] if said else "the agent printed nothing"
             return ERROR, f"the agent did not complete a turn (exit {r.returncode}): {why}"
         payload, sid, err = agent_turn_read(name, r.stdout)
-        session = sid or session
         if err:
             return ERROR, err
+        if name == "codex" and session and sid != session:
+            return ERROR, ("the agent returned output this runner cannot parse: codex resumed "
+                           "a different thread — the scenario did not measure a conversation")
+        session = sid or session
         transcript.append(payload)
 
     (repo.parent / "transcript.json").write_text(json.dumps(transcript, indent=2))
@@ -1093,7 +1339,7 @@ def judge_repo_state(sc, repo, transcript):
         vp = repo / ".ddw-eval-verdicts.jsonl"
         rows = ([json.loads(l) for l in vp.read_text().splitlines() if l.strip()]
                 if vp.exists() else [])
-        if not any(r.get("exit") not in (0, None) for r in rows):
+        if not any(_hook_refused(r) for r in rows):
             problems.append("no hook refused anything at all — a run where nothing was refused "
                             "is the 'the agent politely declines' false pass")
 
@@ -1106,7 +1352,7 @@ def judge_repo_state(sc, repo, transcript):
             if exp.get("hook_ran") and not rows:
                 problems.append("no hook verdict was recorded")
             for needle in exp.get("hook_refused", []):
-                if not any(r["exit"] != 0 and (r.get("path") or "").endswith(needle)
+                if not any(_hook_refused(r) and (r.get("path") or "").endswith(needle)
                            for r in rows):
                     problems.append(f"no hook refused a write to {needle} "
                                     f"(verdicts seen: {[(r['hook'], r['exit']) for r in rows]})")
@@ -1133,6 +1379,14 @@ def judge_repo_state(sc, repo, transcript):
     if problems:
         return FAIL, "; ".join(problems)
     return PASS, "the repo ended where the rules say it must"
+
+
+def _hook_refused(row: dict) -> bool:
+    # Codex distinguishes a pre-write denial from advisory post feedback and
+    # non-blocking hook errors. Other adapters retain their existing contract.
+    if "refused" in row:
+        return row["refused"] is True
+    return row.get("exit") not in (0, None)
 
 
 # --------------------------------------------------------------------------- #

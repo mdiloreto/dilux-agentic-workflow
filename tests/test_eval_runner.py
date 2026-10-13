@@ -23,6 +23,8 @@ import json
 import os
 import pathlib
 import subprocess
+import sys
+import tomllib
 
 import pytest
 
@@ -534,3 +536,368 @@ def test_the_verdict_tap_covers_copilot(tmp_path, monkeypatch):
     for name in ("pre-tool-use.sh", "post-write.sh"):
         (hooks / name).write_text("#!/usr/bin/env bash\nexit 0\n")
     assert runner.install_verdict_tap(tmp_path) == 2
+
+
+# ── Codex: explicit fixture trust, resumable JSONL, and real hook verdicts ────
+
+def _codex_events() -> list[dict]:
+    return [
+        {"type": "thread.started", "thread_id": "thread-123"},
+        {"type": "turn.started"},
+        {"type": "item.completed", "item": {
+            "id": "item_1", "type": "agent_message", "text": "The write is refused."}},
+        {"type": "turn.completed", "usage": {
+            "input_tokens": 10, "cached_input_tokens": 0, "output_tokens": 5,
+            "reasoning_output_tokens": 0}},
+    ]
+
+
+def _jsonl(events: list[dict]) -> str:
+    return "\n".join(json.dumps(event) for event in events) + "\n"
+
+
+@pytest.mark.parametrize("session", [None, "thread-123"])
+@pytest.mark.parametrize("entrypoint", [["codex"], ["codex", "exec"]])
+def test_codex_commands_keep_the_sandbox_and_resume_signature(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+    session: str | None, entrypoint: list[str],
+) -> None:
+    """Resume has no --cd or --sandbox; config overrides govern both turns."""
+    root = (tmp_path / 'fixture "with spaces"').resolve()
+    codex_home = tmp_path / "isolated-codex-home"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    name, cmd, env = runner.agent_turn_cmd(
+        entrypoint, "test-model", session, "--literal prompt", repo=root)
+    global_flags = [
+        "-c", 'approval_policy="never"',
+        "-c", 'sandbox_mode="workspace-write"',
+        "-c", f'projects.{json.dumps(str(root))}.trust_level="trusted"',
+    ]
+    flags = ["--json", "--ignore-user-config", "--dangerously-bypass-hook-trust",
+             "--model", "test-model"]
+    tail = (["resume", *flags, "--", session, "--literal prompt"] if session else
+            ["--sandbox", "workspace-write", "--cd", str(root), *flags,
+             "--", "--literal prompt"])
+    assert name == "codex"
+    assert cmd == ["codex", *global_flags, "exec", *tail]
+    trust = tomllib.loads(global_flags[-1])
+    assert trust["projects"][str(root)]["trust_level"] == "trusted"
+    assert env["PWD"] == str(root)
+    assert env["CODEX_HOME"] == str(codex_home)
+    assert not codex_home.exists(), "the harness must not create or copy auth/config files"
+
+
+def test_codex_requires_a_fixture_root() -> None:
+    """A missing root must not accidentally trust or run in the operator's tree."""
+    with pytest.raises(RuntimeError, match="fixture"):
+        runner.agent_turn_cmd(["codex"], None, None, "Do something")
+
+
+@pytest.mark.parametrize("arguments", [
+    ["--dangerously-bypass-approvals-and-sandbox"], ["--sandbox", "danger-full-access"],
+    ["exec", "resume", "--last"], ["--disable", "hooks"],
+])
+def test_codex_caller_flags_cannot_disable_fixture_protections(arguments: list[str]) -> None:
+    """Only the harness constructs sandbox, output, hook, and session options."""
+    with pytest.raises(RuntimeError, match="harness controls"):
+        runner.agent_turn_cmd(["codex", *arguments], None, None, "Do something", repo="/fixture")
+
+
+def test_codex_reads_a_completed_thread_without_using_model_prose() -> None:
+    """The event objects remain available for transcript-format assertions."""
+    events = _codex_events()
+    payload, session, error = runner.agent_turn_read("codex", _jsonl(events))
+    assert error is None
+    assert session == "thread-123"
+    assert payload == events
+
+
+@pytest.mark.parametrize("stdout", [
+    "", "The write is refused.", "[]\n", "null\n", "42\n", "{}\n",
+    '{"type": "thread.started",\n',
+    _jsonl(_codex_events()) + "not JSON\n",
+    _jsonl(_codex_events()) + '{"type": "item.completed",\n',
+    '{"type": "thread.started", "thread_id": "one", "thread_id": "two"}\n'
+    + _jsonl(_codex_events()[1:]),
+    _jsonl(_codex_events()).replace('"input_tokens": 10', '"input_tokens": NaN'),
+    _jsonl(_codex_events()).replace('"output_tokens": 5', '"output_tokens": Infinity'),
+    _jsonl(_codex_events()[1:]),
+    _jsonl(_codex_events()[:-1]),
+    _jsonl([_codex_events()[0], _codex_events()[-1]]),
+    _jsonl([*_codex_events()[:2], _codex_events()[-1]]),
+    _jsonl([{"type": "thread.started", "thread_id": 123}, *_codex_events()[1:]]),
+    _jsonl([{"type": "thread.started", "thread_id": ""}, *_codex_events()[1:]]),
+    _jsonl([{"type": "thread.started", "thread_id": "  "}, *_codex_events()[1:]]),
+    _jsonl([_codex_events()[0], _codex_events()[0], *_codex_events()[1:]]),
+    _jsonl([_codex_events()[0], {"type": "thread.started", "thread_id": "other"},
+            *_codex_events()[1:]]),
+    _jsonl([*_codex_events(), _codex_events()[-1]]),
+    _jsonl([*_codex_events()[:2], {"type": "unknown"}, *_codex_events()[2:]]),
+    _jsonl([*_codex_events()[:2], {"type": "item.completed", "item": []},
+            _codex_events()[-1]]),
+    _jsonl([*_codex_events()[:2], {"type": "item.completed", "item": {
+        "id": 3, "type": "agent_message", "text": "Done"}}, _codex_events()[-1]]),
+    _jsonl([*_codex_events()[:2], {"type": "item.completed", "item": {
+        "id": "item_1", "type": "agent_message", "text": 3}}, _codex_events()[-1]]),
+    _jsonl([*_codex_events()[:2], {"type": "item.completed", "item": {
+        "id": "item_1", "type": "agent_message", "text": ""}}, _codex_events()[-1]]),
+    _jsonl([*_codex_events()[:-1], {"type": "turn.completed"}]),
+    _jsonl([*_codex_events()[:-1], {"type": "turn.completed", "usage": []}]),
+    _jsonl([*_codex_events()[:-1], {"type": "turn.completed", "usage": {
+        "input_tokens": True, "cached_input_tokens": 0, "output_tokens": 5}}]),
+    _jsonl([*_codex_events()[:-1], {"type": "turn.completed", "usage": {
+        "input_tokens": 1, "cached_input_tokens": 0, "output_tokens": -1}}]),
+    _jsonl([*_codex_events()[:2], {"type": "item.started", "item": {
+        "id": "unfinished", "type": "agent_message", "text": "Thinking"}},
+        *_codex_events()[2:]]),
+])
+def test_codex_unjudgeable_streams_fail_closed(stdout: str) -> None:
+    """A zero CLI exit cannot make malformed, ambiguous, or empty turns green."""
+    _, _, error = runner.agent_turn_read("codex", stdout)
+    assert error and error.startswith("the agent returned output this runner cannot parse")
+
+
+@pytest.mark.parametrize("event", [
+    {"type": "error", "message": "Connection failed"},
+    {"type": "turn.failed", "error": {"message": "Model unavailable"}},
+])
+def test_codex_errors_are_not_completed_turns(event: dict) -> None:
+    """Even an error following a completion invalidates the measurement."""
+    _, _, error = runner.agent_turn_read("codex", _jsonl([*_codex_events(), event]))
+    assert error and error.startswith("the agent reported an error")
+
+
+def test_codex_parses_tool_lifecycles_including_a_refused_patch() -> None:
+    """A failed tool is not a failed turn: the hook log determines enforcement."""
+    command = {"id": "command", "type": "command_execution", "command": "ls",
+               "aggregated_output": "", "exit_code": None, "status": "in_progress"}
+    plan = {"id": "plan", "type": "todo_list", "items": [{"text": "Check", "completed": False}]}
+    events = [*_codex_events()[:2],
+              {"type": "item.started", "item": command},
+              {"type": "item.completed", "item": dict(command, status="completed", exit_code=0)},
+              {"type": "item.started", "item": plan},
+              {"type": "item.updated", "item": plan},
+              {"type": "item.completed", "item": plan},
+              {"type": "item.completed", "item": {
+                  "id": "patch", "type": "file_change", "status": "failed",
+                  "changes": [{"path": "src/a.py", "kind": "add"}]}},
+              *_codex_events()[2:]]
+    payload, session, error = runner.agent_turn_read("codex", _jsonl(events))
+    assert error is None and session == "thread-123" and payload == events
+
+
+@pytest.mark.parametrize("item", [
+    {"id": "bad", "type": "future_item"},
+    {"id": "bad", "type": "command_execution", "command": "ls", "status": "completed"},
+    {"id": "bad", "type": "file_change", "changes": "src/a.py", "status": "completed"},
+    {"id": "bad", "type": "file_change", "changes": [{}], "status": "completed"},
+    {"id": "bad", "type": "todo_list", "items": [{"text": "Check", "completed": "yes"}]},
+    {"id": "bad", "type": "web_search", "query": "query", "action": []},
+])
+def test_codex_schema_invalid_tool_items_are_harness_errors(item: dict) -> None:
+    events = [*_codex_events()[:2], {"type": "item.completed", "item": item}, *_codex_events()[2:]]
+    assert runner.agent_turn_read("codex", _jsonl(events))[2] is not None
+
+
+@pytest.fixture()
+def codex_hooks(repo: pathlib.Path) -> pathlib.Path:
+    """Fake adapter hooks capture bytes and produce independent hook outcomes."""
+    hooks = repo / ".codex" / "hooks" / "ddw"
+    hooks.mkdir(parents=True)
+    for name, code in (("pre-tool-use.sh", 2), ("post-write.sh", 0)):
+        (hooks / name).write_text(
+            '#!/usr/bin/env bash\ncat > "$(dirname "$0")/captured-' + name + '"\n'
+            'printf \'original stdout\\n\'\nprintf \'original stderr\\n\' >&2\n'
+            f'exit {code}\n')
+    for name in ("session-start.sh", "pre-compact.sh"):
+        (hooks / name).write_text("#!/usr/bin/env bash\nexit 0\n")
+    manifest = {f"codex:.codex/hooks/ddw/{name}": runner._fingerprint(hooks / name)
+                for name in ("pre-tool-use.sh", "post-write.sh", "session-start.sh", "pre-compact.sh")}
+    manifest["codex:.codex/hooks.json"] = "unchanged-wiring"
+    (repo / ".ddw-installed.json").write_text(json.dumps(manifest))
+    return hooks
+
+
+def test_codex_taps_preserve_streams_exit_and_every_patch_path(
+    repo: pathlib.Path, codex_hooks: pathlib.Path, tmp_path: pathlib.Path,
+) -> None:
+    """The fixture log, not CLAUDE_PROJECT_DIR or a payload cwd, owns the tap."""
+    assert runner.install_verdict_tap(repo) == 2
+    command = ("*** Begin Patch\n*** Add File: src/new.py\n+x\n"
+               "*** Update File: src/old.py\n*** Move to: src/renamed.py\n"
+               "@@\n-x\n+y\n*** Delete File: src/deleted.py\n*** End Patch\n")
+    payload = (json.dumps({"cwd": str(tmp_path), "tool_name": "apply_patch",
+                           "tool_input": {"command": command}}) + "\n\n").encode()
+    nested = repo / "nested"
+    nested.mkdir()
+    for name, code in (("pre-tool-use.sh", 2), ("post-write.sh", 0)):
+        result = subprocess.run(
+            ["bash", str(codex_hooks / name)], input=payload, cwd=nested,
+            env=dict(os.environ, CLAUDE_PROJECT_DIR=str(tmp_path)), capture_output=True)
+        assert result.returncode == code
+        assert result.stdout == b"original stdout\n"
+        assert result.stderr == b"original stderr\n"
+        assert (codex_hooks / f"captured-{name}").read_bytes() == payload
+    rows = [json.loads(line) for line in (repo / ".ddw-eval-verdicts.jsonl").read_text().splitlines()]
+    paths = ["src/new.py", "src/old.py", "src/renamed.py", "src/deleted.py"]
+    assert [(row["path"], row["exit"]) for row in rows] == [
+        (path, code) for code in (2, 0) for path in paths]
+    assert all(row["tool"] == "apply_patch" for row in rows)
+    assert not (tmp_path / ".ddw-eval-verdicts.jsonl").exists()
+    assert _judge(repo, {"hook_refused": paths, "hook_ran": True})[0] == runner.PASS
+    assert not (codex_hooks / "session-start.real.sh").exists()
+    assert not (codex_hooks / "pre-compact.real.sh").exists()
+
+
+def test_codex_tap_reseals_only_the_installed_hook_files(
+    repo: pathlib.Path, codex_hooks: pathlib.Path,
+) -> None:
+    """The installer records each hook file; untouched hooks and wiring stay sealed."""
+    before = json.loads((repo / ".ddw-installed.json").read_text())
+    runner.install_verdict_tap(repo)
+    manifest = json.loads((repo / ".ddw-installed.json").read_text())
+    for name in ("pre-tool-use.sh", "post-write.sh"):
+        key = f"codex:.codex/hooks/ddw/{name}"
+        assert manifest[key] == runner._fingerprint(codex_hooks / name)
+        assert manifest[key] != before[key]
+    for name in ("session-start.sh", "pre-compact.sh"):
+        key = f"codex:.codex/hooks/ddw/{name}"
+        assert manifest[key] == before[key]
+    assert manifest["codex:.codex/hooks.json"] == "unchanged-wiring"
+
+
+def test_codex_installed_adapter_records_real_multi_path_refusals(tmp_path: pathlib.Path) -> None:
+    """Exercise the installer and gate, not a second implementation of their wiring."""
+    repo = runner.make_repo(pathlib.Path(ROOT), "codex", tmp_path / "fixture")
+    hooks = repo / ".codex" / "hooks" / "ddw"
+    assert (repo / ".codex" / "hooks.json").is_file()
+    assert runner.install_verdict_tap(repo) == 2
+    manifest = json.loads((repo / ".ddw-installed.json").read_text())
+    for name in ("pre-tool-use.sh", "post-write.sh"):
+        assert manifest[f"codex:.codex/hooks/ddw/{name}"] == runner._fingerprint(hooks / name)
+    event = {"tool_name": "apply_patch", "tool_input": {"command":
+             "*** Begin Patch\n*** Add File: src/a.py\n+x\n"
+             "*** Add File: src/b.py\n+y\n*** End Patch\n"}}
+    result = subprocess.run(["bash", str(hooks / "pre-tool-use.sh")], cwd=repo,
+                            input=json.dumps(event), text=True, capture_output=True)
+    assert result.returncode == 2
+    decision = json.loads(result.stdout)["hookSpecificOutput"]
+    assert decision["permissionDecision"] == "deny"
+    assert result.stderr.strip(), "exit 2 must retain the adapter's blocking reason"
+    assert _judge(repo, {"hook_refused": ["src/a.py", "src/b.py"]})[0] == runner.PASS
+
+
+def test_codex_allow_and_polite_prose_are_not_hook_refusals(
+    repo: pathlib.Path, codex_hooks: pathlib.Path,
+) -> None:
+    """Neither a successful hook nor a model refusal proves enforcement."""
+    runner.install_verdict_tap(repo)
+    payload = json.dumps({"tool_name": "Write", "tool_input": {"file_path": "src/a.py"}})
+    subprocess.run(["bash", str(codex_hooks / "post-write.sh")], input=payload,
+                   text=True, cwd=repo, check=True, capture_output=True)
+    verdict, _ = runner.judge_repo_state(
+        {"expect": {"files_absent": ["src/a.py"], "hook_refused": ["src/a.py"],
+                    "hook_refused_any": True}}, repo, _codex_events())
+    assert verdict == runner.FAIL
+    (repo / ".ddw-eval-verdicts.jsonl").unlink()
+    assert runner.judge_repo_state(
+        {"expect": {"hook_refused_any": True}}, repo, _codex_events())[0] == runner.FAIL
+
+
+@pytest.mark.parametrize("hook, code", [("pre-tool-use.sh", 1), ("post-write.sh", 2)])
+def test_codex_hook_errors_and_post_feedback_are_not_write_denials(
+    repo: pathlib.Path, codex_hooks: pathlib.Path, hook: str, code: int,
+) -> None:
+    """Codex ignores non-2 pre errors, and post hooks cannot undo a write."""
+    (codex_hooks / hook).write_text(f"#!/usr/bin/env bash\ncat >/dev/null\nexit {code}\n")
+    runner.install_verdict_tap(repo)
+    result = subprocess.run(
+        ["bash", str(codex_hooks / hook)], input=json.dumps({
+            "tool_name": "Write", "tool_input": {"file_path": "src/a.py"}}),
+        text=True, cwd=repo, capture_output=True)
+    assert result.returncode == code
+    assert _judge(repo, {"hook_refused": ["src/a.py"], "hook_refused_any": True})[0] == runner.FAIL
+
+
+@pytest.mark.parametrize("events", [_codex_events()[:-1], [{"type": "error", "message": "Failed"}]])
+def test_codex_behavioral_parse_failure_is_error(
+    repo: pathlib.Path, codex_hooks: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+    events: list[dict],
+) -> None:
+    """A successful process exit still cannot make a broken turn judgeable."""
+    monkeypatch.setattr(runner, "sh", lambda *args, **kwargs:
+                        subprocess.CompletedProcess(args[0], 0, _jsonl(events), ""))
+    scenario = {"given": {}, "when": {"turns": ["First turn"]}, "expect": {}}
+    assert runner.run_behavioral(scenario, pathlib.Path(ROOT), repo, ["codex"], None)[0] == runner.ERROR
+
+
+def test_codex_behavioral_scenario_without_turns_is_not_green(repo: pathlib.Path) -> None:
+    """No subprocess or parser runs for an empty scenario, so guard that boundary too."""
+    scenario = {"given": {}, "when": {"turns": []}, "expect": {}}
+    verdict, detail = runner.run_behavioral(scenario, pathlib.Path(ROOT), repo, ["codex"], None)
+    assert verdict == runner.ERROR and detail.startswith("the agent did not complete a turn")
+
+
+def test_codex_behavioral_resume_cannot_silently_start_a_different_thread(
+    repo: pathlib.Path, codex_hooks: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex can start a new thread when a requested resume target is absent."""
+    changed = [{"type": "thread.started", "thread_id": "other"}, *_codex_events()[1:]]
+    outputs = iter([_jsonl(_codex_events()), _jsonl(changed)])
+    monkeypatch.setattr(runner, "sh", lambda *args, **kwargs:
+                        subprocess.CompletedProcess(args[0], 0, next(outputs), ""))
+    scenario = {"given": {}, "when": {"turns": ["First turn", "Second turn"]}, "expect": {}}
+    verdict, detail = runner.run_behavioral(scenario, pathlib.Path(ROOT), repo, ["codex"], None)
+    assert verdict == runner.ERROR and "different thread" in detail
+
+
+def test_codex_behavioral_turns_execute_in_the_fixture_and_resume(
+    repo: pathlib.Path, codex_hooks: pathlib.Path, tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fake binary exercises subprocess cwd/env and both real command builds."""
+    binary = tmp_path / "codex"
+    binary.write_text(
+        f"#!{sys.executable}\nimport json, os, sys\n"
+        "with open('calls.jsonl', 'a') as log:\n"
+        "    log.write(json.dumps({'argv': sys.argv[1:], 'cwd': os.getcwd(), "
+        "'pwd': os.environ['PWD'], 'codex_home': os.environ['CODEX_HOME']}) + '\\n')\n"
+        f"print({_jsonl(_codex_events())!r}, end='')\n")
+    binary.chmod(0o755)
+    codex_home = tmp_path / "codex-home"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    scenario = {"given": {}, "when": {"turns": ["First turn", "Second turn"]},
+                "expect": {"files_absent": ["src/a.py"]}}
+    verdict, _ = runner.run_behavioral(scenario, pathlib.Path(ROOT), repo, [str(binary)], None)
+    assert verdict == runner.PASS
+    calls = [json.loads(line) for line in (repo / "calls.jsonl").read_text().splitlines()]
+    assert len(calls) == 2
+    for call in calls:
+        assert call["cwd"] == call["pwd"] == str(repo.resolve())
+        assert call["codex_home"] == str(codex_home)
+    assert "resume" not in calls[0]["argv"]
+    assert calls[1]["argv"][-3:] == ["--", "thread-123", "Second turn"]
+    assert "--sandbox" not in calls[1]["argv"] and "--cd" not in calls[1]["argv"]
+    assert json.loads((repo.parent / "transcript.json").read_text()) == [_codex_events()] * 2
+
+
+@pytest.mark.parametrize("stdout", [
+    _jsonl(_codex_events()[:-1]), _jsonl(_codex_events()[1:]), "not JSON\n",
+    _jsonl([{"type": "error", "message": "Failed"}]),
+    _jsonl([{"type": "turn.failed", "error": {"message": "Failed"}}]),
+])
+def test_control_rejects_codex_parse_errors_instead_of_claiming_a_red(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture,
+    stdout: str,
+) -> None:
+    """Execute control-mode classification; parser failures are harness failures."""
+    scenarios = tmp_path / "scenarios"
+    scenarios.mkdir()
+    (scenarios / "one.yaml").write_text("id: one\nkind: behavioral\ngiven: {}\n")
+    _, _, error = runner.agent_turn_read("codex", stdout)
+    monkeypatch.setattr(runner, "run_one", lambda *args, **kwargs: runner.Result(
+        "one", "behavioral", runner.ERROR, error))
+    monkeypatch.setattr(sys, "argv", ["runner.py", "--repo", ROOT, "--scenarios",
+                                    str(scenarios), "--control"])
+    assert runner.main() == 1
+    assert "the control proved nothing" in capsys.readouterr().out
