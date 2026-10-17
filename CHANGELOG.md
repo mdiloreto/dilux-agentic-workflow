@@ -38,7 +38,9 @@ move at different speeds. So the promise is specific:
   CLI 2.1.296 strict plugin validation otherwise rejects them.
 - **Split sub-PRDs validate against their assigned global AC IDs.** A child no
   longer fails for gaps that belong to sibling tickets; standalone PRDs still
-  require gapless IDs, and extra or duplicate child ACs still fail.
+  require gapless IDs, and extra or duplicate child ACs still fail. Split
+  indexes and children also reject multiple assignment rows for one sub-ticket
+  instead of silently combining them.
 
 ## [0.57.1] - 2026-10-11
 

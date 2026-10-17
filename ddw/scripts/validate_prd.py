@@ -91,6 +91,10 @@ UNWANTED = re.compile(r"\bIF\b.+?\bTHEN\b.+?\bSHALL\b", re.IGNORECASE | re.DOTAL
 REQ_ID = re.compile(r"\b(FR|NFR|AC)-(\d+)\b")
 
 
+class SplitIndexError(ValueError):
+    """The sibling is a split index, but cannot assign one authoritative row."""
+
+
 def _unfilled(value):
     """Is this still the template's placeholder rather than an answer?
 
@@ -241,13 +245,24 @@ def _assigned_split_acs(prd):
     if not re.search(r"^\|\s*Status\s*\|\s*Split\s*\|", text,
                      re.MULTILINE | re.IGNORECASE):
         return None
-    assigned = set()
+    ticket = child.group(1)[4:] + child.group(2)
+    matching = []
     for row in re.findall(r"^\|.*$", text, re.MULTILINE):
         cells = [cell.strip() for cell in row.strip().strip("|").split("|")]
-        if len(cells) >= 4 and cells[0] == child.group(1)[4:] + child.group(2) \
-                and cells[2] == name:
-            assigned.update(re.findall(r"\bAC-\d+\b", cells[3]))
-    return assigned
+        if len(cells) >= 4 and cells[0] == ticket:
+            matching.append(cells)
+    if len(matching) > 1:
+        raise SplitIndexError(
+            f"split index has multiple rows for {ticket}; one child needs exactly one "
+            "authoritative AC assignment row"
+        )
+    if not matching:
+        return set()
+    if matching[0][2] != name:
+        raise SplitIndexError(
+            f"split index row for {ticket} points to {matching[0][2] or 'no PRD'} instead of {name}"
+        )
+    return set(re.findall(r"\bAC-\d+\b", matching[0][3]))
 
 
 def main():
@@ -287,12 +302,13 @@ def main():
         m = re.search(r"^\|\s*Acceptance criteria to cover\s*\|\s*(\d+)",
                       text, re.MULTILINE | re.IGNORECASE)
         total = int(m.group(1)) if m else 0
-        taken, dupes = {}, []
+        taken, dupes, sub_rows = {}, [], {}
         for row in re.findall(r"^\|.*$", text, re.MULTILINE):
             cells = [c.strip() for c in row.strip().strip("|").split("|")]
             sub = cells[0] if cells else ""
             if not re.match(r"^[A-Z]+-\d+[a-z]$", sub):
                 continue
+            sub_rows[sub] = sub_rows.get(sub, 0) + 1
             for ac in re.findall(r"AC-\d+", " ".join(cells)):
                 if ac in taken:
                     dupes.append(f"{ac} is in {taken[ac]} and {sub}")
@@ -323,6 +339,12 @@ def main():
                                 % (total, ", ".join(extra)))
             if dupes:
                 problems.append("; ".join(dupes))
+            repeated = sorted(sub for sub, count in sub_rows.items() if count > 1)
+            if repeated:
+                problems.append(
+                    "multiple rows for " + ", ".join(repeated)
+                    + " — each sub-ticket needs exactly one authoritative row"
+                )
             if problems:
                 fail("F-PRD-10", "the split does not partition the original: " + " · ".join(problems))
             else:
@@ -514,17 +536,24 @@ def main():
                              "measured nothing must not pass" % ", ".join(empty))
         else:
             dup_msgs = []
+            split_index_error = None
             try:
                 assigned_acs = _assigned_split_acs(args.prd)
             except (OSError, UnicodeDecodeError) as exc:
                 print(f"validate_prd: cannot read split index for {args.prd}: {exc}",
                       file=sys.stderr)
                 sys.exit(3)
+            except SplitIndexError as exc:
+                assigned_acs = None
+                split_index_error = str(exc)
+                dup_msgs.append(split_index_error)
             for prefix, items in (("FR", frs), ("NFR", nfrs), ("AC", acs)):
                 ids = [i for i, _ in items]
                 dupes = sorted({i for i in ids if ids.count(i) > 1})
                 if dupes:
                     dup_msgs.append(f"duplicated {', '.join(dupes)}")
+                if prefix == "AC" and split_index_error:
+                    continue
                 if prefix == "AC" and assigned_acs is not None:
                     missing = sorted(assigned_acs - set(ids))
                     extra = sorted(set(ids) - assigned_acs)
