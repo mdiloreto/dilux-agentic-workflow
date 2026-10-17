@@ -3669,6 +3669,22 @@ MUTATIONS = [
      edit("ddw/scripts/family_impact.py",
           '                member["row_behind"] = bool(',
           '                member["row_behind"] = False and bool(')),
+    ("a split child goes back to requiring locally gapless AC ids",
+     edit("ddw/scripts/validate_prd.py",
+          '                if prefix == "AC" and assigned_acs is not None:',
+          "                if False:")),
+    ("a split child stops rejecting ACs missing from or unassigned by its index row",
+     edit("ddw/scripts/validate_prd.py",
+          "                    if missing or extra:",
+          "                    if False:")),
+    ("a split index accepts multiple authoritative rows for one child",
+     edit("ddw/scripts/validate_prd.py",
+          "            if repeated:",
+          "            if False:")),
+    ("a split child silently combines AC assignments from repeated rows",
+     edit("ddw/scripts/validate_prd.py",
+          "    if len(matching) > 1:",
+          "    if False:")),
 ]
 
 

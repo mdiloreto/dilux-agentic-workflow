@@ -40,7 +40,8 @@ move at different speeds. So the promise is specific:
   longer fails for gaps that belong to sibling tickets; standalone PRDs still
   require gapless IDs, and extra or duplicate child ACs still fail. Split
   indexes and children also reject multiple assignment rows for one sub-ticket
-  instead of silently combining them.
+  instead of silently combining them. Four mutations pin the global-ID and
+  single-row guards so neither can disappear behind an otherwise-green suite.
 
 ## [0.57.1] - 2026-10-11
 
