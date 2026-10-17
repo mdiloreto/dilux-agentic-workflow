@@ -511,6 +511,18 @@ def _codex_turn_cmd(agent_cmd: list[str], model: str | None, session: str | None
     if agent_cmd[1:] not in ([], ["exec"]):
         raise RuntimeError("codex: use the binary or 'codex exec'; the harness controls headless "
                            "options so caller flags cannot disable the sandbox or hooks")
+    raw_codex_home = os.environ.get("CODEX_HOME")
+    if not raw_codex_home:
+        raise RuntimeError("codex: CODEX_HOME must be explicitly set to an isolated home; the harness "
+                           "never reads or copies credentials")
+    try:
+        codex_home = Path(raw_codex_home).expanduser().resolve()
+        default_home = (Path.home() / ".codex").resolve()
+    except (OSError, RuntimeError) as exc:
+        raise RuntimeError("codex: CODEX_HOME could not be resolved for isolation") from exc
+    if codex_home == default_home:
+        raise RuntimeError("codex: CODEX_HOME must not be the operator's default ~/.codex; use an "
+                           "isolated home")
     root = str(Path(repo).resolve())
     cmd = list(agent_cmd)
     if cmd[-1] == "exec":
@@ -528,10 +540,9 @@ def _codex_turn_cmd(agent_cmd: list[str], model: str | None, session: str | None
     if model:
         cmd += [part.format(model=model) for part in profile["model"]]
     cmd += ["--", session, turn] if session else ["--", turn]
-    # CODEX_HOME is caller-owned: CI can isolate auth, sessions, and user hooks
-    # without this harness reading or copying credentials. Ignoring config.toml
-    # alone is not a promise that all user/system hook sources are disabled.
-    return "codex", cmd, dict(os.environ, PWD=root)
+    # CODEX_HOME is caller-owned. Its explicit, non-default path isolates user
+    # hooks without this harness reading, creating, or copying credentials.
+    return "codex", cmd, dict(os.environ, PWD=root, CODEX_HOME=str(codex_home))
 
 
 _OC_SESSION = re.compile(r'"sessionID"\s*:\s*"([^"]+)"')

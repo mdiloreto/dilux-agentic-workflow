@@ -583,7 +583,7 @@ def test_codex_commands_keep_the_sandbox_and_resume_signature(
     trust = tomllib.loads(global_flags[-1])
     assert trust["projects"][str(root)]["trust_level"] == "trusted"
     assert env["PWD"] == str(root)
-    assert env["CODEX_HOME"] == str(codex_home)
+    assert env["CODEX_HOME"] == str(codex_home.resolve())
     assert not codex_home.exists(), "the harness must not create or copy auth/config files"
 
 
@@ -591,6 +591,29 @@ def test_codex_requires_a_fixture_root() -> None:
     """A missing root must not accidentally trust or run in the operator's tree."""
     with pytest.raises(RuntimeError, match="fixture"):
         runner.agent_turn_cmd(["codex"], None, None, "Do something")
+
+
+def test_codex_requires_an_explicit_non_default_home(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Hook-trust bypass is safe only when caller-owned user state is isolated."""
+    operator_home = tmp_path / "operator-home"
+    default_home = operator_home / ".codex"
+    default_home.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(operator_home))
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    with pytest.raises(RuntimeError, match="CODEX_HOME must be explicitly"):
+        runner.agent_turn_cmd(["codex"], None, None, "Do something", repo=tmp_path / "fixture")
+
+    monkeypatch.setenv("CODEX_HOME", str(default_home))
+    with pytest.raises(RuntimeError, match="must not be the operator's default"):
+        runner.agent_turn_cmd(["codex"], None, None, "Do something", repo=tmp_path / "fixture")
+
+    alias = tmp_path / "codex-alias"
+    alias.symlink_to(default_home, target_is_directory=True)
+    monkeypatch.setenv("CODEX_HOME", str(alias))
+    with pytest.raises(RuntimeError, match="must not be the operator's default"):
+        runner.agent_turn_cmd(["codex"], None, None, "Do something", repo=tmp_path / "fixture")
 
 
 @pytest.mark.parametrize("arguments", [
@@ -827,6 +850,7 @@ def test_codex_behavioral_parse_failure_is_error(
     """A successful process exit still cannot make a broken turn judgeable."""
     monkeypatch.setattr(runner, "sh", lambda *args, **kwargs:
                         subprocess.CompletedProcess(args[0], 0, _jsonl(events), ""))
+    monkeypatch.setenv("CODEX_HOME", str(repo.parent / "isolated-codex-home"))
     scenario = {"given": {}, "when": {"turns": ["First turn"]}, "expect": {}}
     assert runner.run_behavioral(scenario, pathlib.Path(ROOT), repo, ["codex"], None)[0] == runner.ERROR
 
@@ -846,6 +870,7 @@ def test_codex_behavioral_resume_cannot_silently_start_a_different_thread(
     outputs = iter([_jsonl(_codex_events()), _jsonl(changed)])
     monkeypatch.setattr(runner, "sh", lambda *args, **kwargs:
                         subprocess.CompletedProcess(args[0], 0, next(outputs), ""))
+    monkeypatch.setenv("CODEX_HOME", str(repo.parent / "isolated-codex-home"))
     scenario = {"given": {}, "when": {"turns": ["First turn", "Second turn"]}, "expect": {}}
     verdict, detail = runner.run_behavioral(scenario, pathlib.Path(ROOT), repo, ["codex"], None)
     assert verdict == runner.ERROR and "different thread" in detail
