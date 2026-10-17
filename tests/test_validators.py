@@ -692,6 +692,23 @@ def test_un_criterio_en_dos_sub_tickets_es_rechazado(tmp_path):
         "an AC duplicated across children passed: " + ("\n".join(refused) or "no refusals at all")
 
 
+def test_un_sub_ticket_repetido_en_el_indice_es_rechazado(tmp_path):
+    """One child needs one authoritative row. Otherwise its title,
+    dependencies and status can disagree while the AC sets are silently
+    combined into a document no person approved."""
+    row = "| FEAT-001a | Ingesta | prd-FEAT-001a.md | AC-01, AC-02, AC-03 | none | active |"
+    repeated = INDICE.replace(
+        row,
+        "| FEAT-001a | First half | prd-FEAT-001a.md | AC-01 | none | active |\n"
+        "| FEAT-001a | Second half | prd-FEAT-001a.md | AC-02, AC-03 | none | active |",
+    )
+    assert repeated != INDICE, "the probe did not duplicate FEAT-001a's row"
+    _, refused = _indice(tmp_path, repeated)
+    assert _refuses(refused, "F-PRD-10"), \
+        "an index with two authoritative rows for one child passed: " + \
+        ("\n".join(refused) or "no refusals at all")
+
+
 def test_un_indice_que_reparte_mas_de_lo_que_declara_es_rechazado(tmp_path):
     """F-PRD-10. The number is written by the model and used to be compared
     against NOTHING, not even the rows below. Measured: an index declared 22
@@ -808,6 +825,20 @@ def test_sub_prd_sin_indice_sigue_exigiendo_ids_contiguos(tmp_path):
 def test_sub_prd_con_ac_global_duplicado_es_rechazado(tmp_path):
     r, refused = _sub_prd_con_ids_globales(tmp_path, acs=("AC-01", "AC-03", "AC-03"))
     assert _refuses(refused, "F-PRD-05"), r.stdout
+
+
+def test_sub_prd_no_combina_asignaciones_de_filas_repetidas(tmp_path):
+    row = "| FEAT-001a | Ingesta | prd-FEAT-001a.md | AC-01, AC-02, AC-03 | none | active |"
+    repeated = INDICE.replace(
+        row,
+        "| FEAT-001a | First half | prd-FEAT-001a.md | AC-01 | none | active |\n"
+        "| FEAT-001a | Second half | prd-FEAT-001a.md | AC-02, AC-03 | none | active |",
+    )
+    _indice(tmp_path, repeated)
+    r, refused = _sub_prd_con_ids_globales(
+        tmp_path, index=False, acs=("AC-01", "AC-02", "AC-03")
+    )
+    assert _refuses(refused, "F-PRD-05") and "multiple rows" in r.stdout, r.stdout
 
 
 def test_un_indice_sin_partes_en_disco_no_es_juzgado_por_ellas(tmp_path):
