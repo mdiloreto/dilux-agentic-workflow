@@ -36,6 +36,9 @@ move at different speeds. So the promise is specific:
   must kill it.
 - **Claude adapter hook commands quote their repository-root paths.** Claude
   CLI 2.1.296 strict plugin validation otherwise rejects them.
+- **Split sub-PRDs validate against their assigned global AC IDs.** A child no
+  longer fails for gaps that belong to sibling tickets; standalone PRDs still
+  require gapless IDs, and extra or duplicate child ACs still fail.
 
 ## [0.57.1] - 2026-10-11
 

@@ -760,6 +760,56 @@ def test_un_sub_prd_con_los_numeros_del_indice_pasa(tmp_path):
         "a sub-PRD carrying exactly its assigned ids was refused: " + "\n".join(refused)
 
 
+def _sub_prd_con_ids_globales(tmp_path, *, index=True, acs=("AC-01", "AC-03")):
+    if index:
+        _indice(tmp_path, INDICE.replace("AC-01, AC-02, AC-03", "AC-01, AC-03")
+                .replace("AC-04, AC-05", "AC-02, AC-04, AC-05"))
+    body = """# PRD FEAT-001a
+
+## Context and Problem
+The purchase is not yet tracked.
+## Goals
+Track one purchase.
+## Functional Requirements
+- FR-01: Record the purchase.
+## Non-Functional Requirements
+- NFR-01: Persist 100% of purchases atomically.
+## Acceptance Criteria
+""" + "\n".join(f"- {ac} (FR-01): WHEN purchased, THE system SHALL record it."
+                for ac in acs) + """
+## Out of Scope
+- Payments.
+## Dependencies
+- Account ledger.
+"""
+    return _validate(tmp_path, "validate_prd.py", "prd-FEAT-001a.md", body)
+
+
+def test_sub_prd_con_ids_globales_no_contiguos_pasa(tmp_path):
+    r, refused = _sub_prd_con_ids_globales(tmp_path)
+    assert r.returncode == 0 and not refused, r.stdout
+
+
+def test_sub_prd_con_ac_ajeno_al_indice_es_rechazado(tmp_path):
+    r, refused = _sub_prd_con_ids_globales(tmp_path, acs=("AC-01", "AC-03", "AC-04"))
+    assert _refuses(refused, "F-PRD-05"), r.stdout
+
+
+def test_sub_prd_sin_ac_asignado_es_rechazado(tmp_path):
+    r, refused = _sub_prd_con_ids_globales(tmp_path, acs=("AC-01",))
+    assert _refuses(refused, "F-PRD-05") and "AC-03" in r.stdout, r.stdout
+
+
+def test_sub_prd_sin_indice_sigue_exigiendo_ids_contiguos(tmp_path):
+    r, refused = _sub_prd_con_ids_globales(tmp_path, index=False)
+    assert _refuses(refused, "F-PRD-05"), r.stdout
+
+
+def test_sub_prd_con_ac_global_duplicado_es_rechazado(tmp_path):
+    r, refused = _sub_prd_con_ids_globales(tmp_path, acs=("AC-01", "AC-03", "AC-03"))
+    assert _refuses(refused, "F-PRD-05"), r.stdout
+
+
 def test_un_indice_sin_partes_en_disco_no_es_juzgado_por_ellas(tmp_path):
     """The index legitimately lands first; F-PRD-11 reads only what exists."""
     r, refused = _indice(tmp_path, INDICE)

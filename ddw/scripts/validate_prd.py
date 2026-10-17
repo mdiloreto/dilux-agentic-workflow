@@ -226,6 +226,30 @@ def _loops_since_human(text):
                   text, re.IGNORECASE | re.MULTILINE)
     return int(m.group(1)) if m else None
 
+
+def _assigned_split_acs(prd):
+    """Return this child's global AC ids from its split index, or None if standalone."""
+    name = os.path.basename(prd)
+    child = re.fullmatch(r"(prd-[A-Z]+-\d+)([a-z])\.md", name)
+    if not child:
+        return None
+    parent = os.path.join(os.path.dirname(os.path.abspath(prd)), child.group(1) + ".md")
+    if not os.path.isfile(parent):
+        return None
+    with open(parent, encoding="utf-8") as index:
+        text = index.read()
+    if not re.search(r"^\|\s*Status\s*\|\s*Split\s*\|", text,
+                     re.MULTILINE | re.IGNORECASE):
+        return None
+    assigned = set()
+    for row in re.findall(r"^\|.*$", text, re.MULTILINE):
+        cells = [cell.strip() for cell in row.strip().strip("|").split("|")]
+        if len(cells) >= 4 and cells[0] == child.group(1)[4:] + child.group(2) \
+                and cells[2] == name:
+            assigned.update(re.findall(r"\bAC-\d+\b", cells[3]))
+    return assigned
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("prd")
@@ -476,7 +500,8 @@ def main():
         else:
             ok("F-PRD-08", "all mandatory sections present and written in")
 
-        # F-PRD-05: unique, gapless IDs — of which there must BE some. Zero
+        # F-PRD-05: unique IDs, locally gapless except for ACs allocated by a
+        # sibling split index — of which there must BE some. Zero
         # parsed used to read as "0 FR, 0 NFR, 0 AC — unique, gapless", a PASS,
         # and with it F-PRD-01/03/06/09 all passed over empty lists: a PRD whose
         # requirement lines miss the ID format cleared the whole battery having
@@ -489,11 +514,26 @@ def main():
                              "measured nothing must not pass" % ", ".join(empty))
         else:
             dup_msgs = []
+            try:
+                assigned_acs = _assigned_split_acs(args.prd)
+            except (OSError, UnicodeDecodeError) as exc:
+                print(f"validate_prd: cannot read split index for {args.prd}: {exc}",
+                      file=sys.stderr)
+                sys.exit(3)
             for prefix, items in (("FR", frs), ("NFR", nfrs), ("AC", acs)):
                 ids = [i for i, _ in items]
                 dupes = sorted({i for i in ids if ids.count(i) > 1})
                 if dupes:
                     dup_msgs.append(f"duplicated {', '.join(dupes)}")
+                if prefix == "AC" and assigned_acs is not None:
+                    missing = sorted(assigned_acs - set(ids))
+                    extra = sorted(set(ids) - assigned_acs)
+                    if missing or extra:
+                        dup_msgs.append("split index AC mismatch: " + "; ".join(
+                            part for part in ("missing " + ", ".join(missing) if missing else "",
+                                              "unassigned " + ", ".join(extra) if extra else "")
+                            if part))
+                    continue
                 nums = sorted(int(i.split('-')[1]) for i in set(ids))
                 gaps = [f"{prefix}-{n:02d}" for n in range(1, nums[-1] + 1)
                         if nums and n not in nums] if nums else []
@@ -502,7 +542,9 @@ def main():
             if dup_msgs:
                 fail("F-PRD-05", "; ".join(dup_msgs))
             else:
-                ok("F-PRD-05", f"{len(frs)} FR, {len(nfrs)} NFR, {len(acs)} AC — unique, gapless")
+                ok("F-PRD-05", f"{len(frs)} FR, {len(nfrs)} NFR, {len(acs)} AC — "
+                   + ("unique, ACs match split index" if assigned_acs is not None
+                      else "unique, gapless"))
 
         # F-PRD-01: every FR referenced by at least one AC.
         ac_text = " ".join(t for _, t in acs)
