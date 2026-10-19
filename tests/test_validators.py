@@ -985,6 +985,237 @@ def _f_ver_06(tmp_path, report, spec):
     return [ln for ln in r.stdout.splitlines() if "F-VER-06" in ln]
 
 
+def _f_ver_03(tmp_path, coverage):
+    rp = tmp_path / "verify-T-1.md"
+    rp.write_text("# Verification T-1\n\n" + coverage, encoding="utf-8")
+    r = subprocess.run([sys.executable, os.path.join(ROOT, "ddw/scripts/validate_verify.py"),
+                        str(rp)], capture_output=True, text=True, cwd=str(tmp_path))
+    return next(ln for ln in r.stdout.splitlines() if "F-VER-03" in ln)
+
+
+def _f_test_04(tmp_path, coverage):
+    report = tmp_path / "tests-T-1.md"
+    report.write_text("# Test run T-1\n\n" + coverage, encoding="utf-8")
+    result = subprocess.run([sys.executable, os.path.join(ROOT, "ddw/scripts/validate_tests.py"),
+                             str(report)], capture_output=True, text=True, cwd=str(tmp_path))
+    return [line for line in result.stdout.splitlines() if "F-TEST-04" in line]
+
+
+def test_test_report_rejects_100_percent_over_zero_denominator(tmp_path):
+    rows = _f_test_04(tmp_path, "| Line coverage | 90% |\n"
+                      "| Branch coverage | 100% (0/0 branches) |\n"
+                      "| Function coverage | 100% (0/0 functions) |\n"
+                      "| Coverage floor | 80% (method default) |\n")
+    assert rows and "❌" in rows[0] and "0/0" in rows[0], rows
+
+
+def test_test_report_rejects_percentage_over_stated_absence_without_counts(tmp_path):
+    rows = _f_test_04(tmp_path, "| Line coverage | 100% |\n"
+                      "| Branch coverage | 100% (no hay ramas de código en el archivo) |\n"
+                      "| Function coverage | 100% (no hay funciones definidas en el archivo) |\n")
+    assert rows and "❌" in rows[0] and "branch" in rows[0] and "function" in rows[0], rows
+
+
+def test_test_report_accepts_evidence_backed_na_without_relaxing_lines(tmp_path):
+    (tmp_path / "coverage-summary.json").write_text(
+        '{"frontend/eslint.config.mjs":{"lines":{"covered":9,"total":10},'
+        '"branches":{"covered":0,"total":0},'
+        '"functions":{"covered":0,"total":0}}}', encoding="utf-8")
+    report = ("| Line coverage | 90% |\n"
+              "| Branch coverage | N/A (0/0 instrumented branches) |\n"
+              "| Function coverage | N/A (0/0 instrumented functions) |\n"
+              "| Coverage target | frontend/eslint.config.mjs |\n"
+              "| Coverage command | c8 --reporter=json-summary npm test |\n"
+              "| Coverage evidence | `coverage-summary.json` |\n"
+              "| Behavior test | eslint-config.test.ts — passed |\n"
+              "| Coverage floor | 80% (method default) |\n")
+    rows = _f_test_04(tmp_path, report)
+    assert len(rows) == 1 and "✅" in rows[0] and "N/A" in rows[0], rows
+    (tmp_path / "coverage-summary.json").write_text(
+        '{"frontend/eslint.config.mjs":{"lines":{"covered":7,"total":10},'
+        '"branches":{"covered":0,"total":0},'
+        '"functions":{"covered":0,"total":0}}}', encoding="utf-8")
+    low = _f_test_04(tmp_path, report.replace("Line coverage | 90%", "Line coverage | 70%"))
+    assert any("❌" in row and "70%" in row for row in low), low
+
+
+def test_zero_denominators_cannot_count_as_full_coverage(tmp_path):
+    row = _f_ver_03(tmp_path, "| Line coverage | 100% (5/5) |\n"
+                    "| Branch coverage | 100% (0/0 branches) |\n"
+                    "| Function coverage | 100% (0/0 functions) |\n")
+    assert "❌" in row and "branch" in row and "function" in row, row
+
+
+def test_na_cannot_replace_measured_line_coverage(tmp_path):
+    row = _f_ver_03(tmp_path, "| Line coverage | N/A (0/0 instrumented lines) |\n"
+                    "| Branch coverage | 90% |\n"
+                    "| Function coverage | 90% |\n")
+    assert "❌" in row and "line" in row, row
+
+
+def test_zero_denominators_can_be_na_with_measured_evidence(tmp_path):
+    (tmp_path / "coverage-summary.json").write_text(
+        '{"frontend/eslint.config.mjs":{"lines":{"covered":5,"total":5},'
+        '"branches":{"covered":0,"total":0},'
+        '"functions":{"covered":0,"total":0}}}', encoding="utf-8")
+    row = _f_ver_03(tmp_path, "| Line coverage | 100% (5/5 lines) |\n"
+                    "| Branch coverage | N/A (0/0 instrumented branches) |\n"
+                    "| Function coverage | N/A (0/0 instrumented functions) |\n"
+                    "| Coverage target | frontend/eslint.config.mjs |\n"
+                    "| Coverage command | c8 --reporter=json-summary npm test |\n"
+                    "| Coverage evidence | `coverage-summary.json` |\n"
+                    "| Behavior test | eslint-config.test.ts rejects an invalid JSX pattern — passed |\n")
+    assert "✅" in row and "N/A" in row, row
+
+
+def test_na_requires_zero_denominator_and_auditable_evidence(tmp_path):
+    base = ("| Line coverage | 100% (5/5 lines) |\n"
+            "| Branch coverage | N/A (0/0 instrumented branches) |\n"
+            "| Function coverage | 83% (5/6 functions) |\n")
+    missing = _f_ver_03(tmp_path, base)
+    assert "❌" in missing, missing
+    invalid = _f_ver_03(tmp_path, base.replace("0/0 instrumented branches", "2/2 branches") +
+                        "| Coverage target | frontend/eslint.config.mjs |\n"
+                        "| Coverage command | c8 --reporter=json-summary npm test |\n"
+                        "| Coverage evidence | `coverage-summary.json` |\n"
+                        "| Behavior test | eslint-config.test.ts — passed |\n")
+    assert "❌" in invalid, invalid
+
+
+def test_na_rejects_nonexistent_evidence_file(tmp_path):
+    row = _f_ver_03(tmp_path, "| Line coverage | 90% (9/10 lines) |\n"
+                    "| Branch coverage | N/A (0/0 instrumented branches) |\n"
+                    "| Function coverage | 85% (17/20 functions) |\n"
+                    "| Coverage target | frontend/eslint.config.mjs |\n"
+                    "| Coverage command | c8 --reporter=json-summary npm test |\n"
+                    "| Coverage evidence | `missing-summary.json` |\n"
+                    "| Behavior test | eslint-config.test.ts — passed |\n")
+    assert "❌" in row and "evidence" in row, row
+
+
+def test_na_rejects_0_0_claim_when_instrument_measured_branches(tmp_path):
+    (tmp_path / "coverage-summary.json").write_text(
+        '{"frontend/eslint.config.mjs":{"lines":{"covered":9,"total":10},'
+        '"branches":{"covered":1,"total":2}}}',
+        encoding="utf-8")
+    row = _f_ver_03(tmp_path, "| Line coverage | 90% |\n"
+                    "| Branch coverage | N/A (0/0 instrumented branches) |\n"
+                    "| Function coverage | 85% |\n"
+                    "| Coverage target | frontend/eslint.config.mjs |\n"
+                    "| Coverage command | c8 --reporter=json-summary npm test |\n"
+                    "| Coverage evidence | `coverage-summary.json` |\n"
+                    "| Behavior test | eslint-config.test.ts — passed |\n")
+    assert "❌" in row and "branch" in row, row
+
+
+def test_na_rejects_a_different_coverage_target(tmp_path):
+    (tmp_path / "coverage-summary.json").write_text(
+        '{"some-other-module":{"branches":{"covered":0,"total":0}}}',
+        encoding="utf-8")
+    row = _f_ver_03(tmp_path, "| Line coverage | 90% |\n"
+                    "| Branch coverage | N/A (0/0 instrumented branches) |\n"
+                    "| Function coverage | 85% |\n"
+                    "| Coverage target | frontend/eslint.config.mjs |\n"
+                    "| Coverage command | c8 --reporter=json-summary npm test |\n"
+                    "| Coverage evidence | `coverage-summary.json` |\n"
+                    "| Behavior test | eslint-config.test.ts — passed |\n")
+    assert "❌" in row and "target" in row, row
+
+
+def test_na_rejects_empty_or_contradictory_line_instrumentation(tmp_path):
+    report = ("| Line coverage | 100% |\n"
+              "| Branch coverage | 100% (1/1 branches) |\n"
+              "| Function coverage | N/A (0/0 instrumented functions) |\n"
+              "| Coverage target | frontend/eslint.config.mjs |\n"
+              "| Coverage command | c8 --reporter=json-summary npm test |\n"
+              "| Coverage evidence | `coverage-summary.json` |\n"
+              "| Behavior test | eslint-config.test.ts — passed |\n")
+    raw = tmp_path / "coverage-summary.json"
+    raw.write_text('{"frontend/eslint.config.mjs":{"lines":{"covered":0,"total":0},'
+                   '"branches":{"covered":1,"total":1},'
+                   '"functions":{"covered":0,"total":0}}}', encoding="utf-8")
+    for helper in (_f_ver_03, _f_test_04):
+        rows = helper(tmp_path, report)
+        assert "❌" in str(rows) and "line" in str(rows), rows
+    raw.write_text('{"frontend/eslint.config.mjs":{"lines":{"covered":7,"total":10},'
+                   '"branches":{"covered":1,"total":1},'
+                   '"functions":{"covered":0,"total":0}}}', encoding="utf-8")
+    for helper in (_f_ver_03, _f_test_04):
+        rows = helper(tmp_path, report)
+        assert "❌" in str(rows) and "line" in str(rows), rows
+
+
+def test_na_rejects_simultaneous_percentage_for_the_same_metric(tmp_path):
+    (tmp_path / "coverage-summary.json").write_text(
+        '{"frontend/eslint.config.mjs":{"branches":{"covered":0,"total":0}}}',
+        encoding="utf-8")
+    row = _f_ver_03(tmp_path, "| Line coverage | 90% |\n"
+                    "| Branch coverage | N/A (0/0 instrumented branches) |\n"
+                    "| Branch coverage | 100% |\n"
+                    "| Function coverage | 85% |\n"
+                    "| Coverage target | frontend/eslint.config.mjs |\n"
+                    "| Coverage command | c8 --reporter=json-summary npm test |\n"
+                    "| Coverage evidence | `coverage-summary.json` |\n"
+                    "| Behavior test | eslint-config.test.ts — passed |\n")
+    assert "❌" in row and "contradicts" in row, row
+
+
+def test_na_does_not_confuse_global_baseline_prose_with_local_target(tmp_path):
+    (tmp_path / "coverage-summary.json").write_text(
+        '{"frontend/eslint.config.mjs":{"lines":{"covered":9,"total":10},'
+        '"branches":{"covered":1,"total":1},'
+        '"functions":{"covered":0,"total":0}}}', encoding="utf-8")
+    report = ("| Line coverage | 90% |\n"
+              "| Branch coverage | 100% (1/1) |\n"
+              "| Function coverage | N/A (0/0 instrumented functions) |\n"
+              "| Coverage target | frontend/eslint.config.mjs |\n"
+              "| Coverage command | c8 --reporter=json-summary npm test |\n"
+              "| Coverage evidence | `coverage-summary.json` |\n"
+              "| Behavior test | eslint-config.test.ts — passed |\n"
+              "Cobertura global previa: 37.5% de líneas, 50% de funciones; no cumple el piso.\n")
+    assert "✅ F-VER-03" in _f_ver_03(tmp_path, report)
+    assert any("✅ F-TEST-04" in row for row in _f_test_04(tmp_path, report))
+
+
+@pytest.mark.parametrize("covered,total", [(1, 2), (0, 0)])
+def test_na_requires_instrumented_numeric_branch_to_match_artifact(tmp_path, covered, total):
+    (tmp_path / "coverage-summary.json").write_text(
+        '{"frontend/eslint.config.mjs":{"lines":{"covered":9,"total":10},'
+        '"branches":{"covered":%d,"total":%d},'
+        '"functions":{"covered":0,"total":0}}}' % (covered, total), encoding="utf-8")
+    report = ("| Line coverage | 90% (9/10) |\n"
+              "| Branch coverage | 100% |\n"
+              "| Function coverage | N/A (0/0 instrumented functions) |\n"
+              "| Coverage target | frontend/eslint.config.mjs |\n"
+              "| Coverage command | c8 --reporter=json-summary npm test |\n"
+              "| Coverage evidence | `coverage-summary.json` |\n"
+              "| Behavior test | eslint-config.test.ts — passed |\n")
+    assert "❌ F-VER-03" in _f_ver_03(tmp_path, report)
+    assert any("❌ F-TEST-04" in row for row in _f_test_04(tmp_path, report))
+
+
+@pytest.mark.parametrize("numeric_row", [
+    "Branch coverage: 100%",
+    "- Branch coverage: 100%",
+    "**Branch coverage:** 100%",
+])
+def test_na_rejects_numeric_metric_in_non_table_field(tmp_path, numeric_row):
+    (tmp_path / "coverage-summary.json").write_text(
+        '{"frontend/eslint.config.mjs":{"lines":{"covered":9,"total":10},'
+        '"branches":{"covered":0,"total":0},'
+        '"functions":{"covered":1,"total":1}}}', encoding="utf-8")
+    report = ("| Line coverage | 90% |\n"
+              "| Branch coverage | N/A (0/0 instrumented branches) |\n"
+              "| Function coverage | 100% |\n"
+              + numeric_row + "\n"
+              "| Coverage target | frontend/eslint.config.mjs |\n"
+              "| Coverage command | c8 --reporter=json-summary npm test |\n"
+              "| Coverage evidence | `coverage-summary.json` |\n"
+              "| Behavior test | eslint-config.test.ts — passed |\n")
+    assert "contradicts" in _f_ver_03(tmp_path, report)
+    assert any("contradicts" in row for row in _f_test_04(tmp_path, report))
+
+
 SPEC_BACKTICKS = ("# Spec\n\n## Block 1 — x\n**Required tests**\n"
                   "- [ ] `test_uno` — valida AC-01\n- [ ] `test_dos` — valida AC-02\n")
 

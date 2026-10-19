@@ -30,7 +30,7 @@ set -uo pipefail
 # a knob anyone could turn from outside the file. `docs/AI-POLICY.md` and
 # `CONTRIBUTING.md` both name this variable as the thing not to soften; it was
 # softenable without editing the file they were talking about.
-EXPECT_CHECKS=672
+EXPECT_CHECKS=681
 EXPECT_SKILLS=20
 EXPECT_AGENTS=5
 EXPECT_RULES=14
@@ -40,7 +40,7 @@ EXPECT_ADAPTERS=6
 # `--check-anchors`, `--cover` and every check in this file green, and the
 # published percentage went on being a percentage of a smaller list. The same
 # reason `EXPECT_CHECKS` exists, one file over.
-EXPECT_MUTATIONS=793
+EXPECT_MUTATIONS=799
 
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # EXPORTED, because the Python blocks below anchor their own temporary
@@ -4098,6 +4098,133 @@ VVOUT="$(python3 "$SELF/ddw/scripts/validate_verify.py" "$VRP/broken.md" --tier 
 case "$VVOUT" in
   *"❌ F-VER-03"*"61%"*) ok "and coverage under the minimum is named with its number" ;;
   *) bad "a verdict reporting 61% line coverage passed the 80% floor" ;;
+esac
+
+# A module with no branches or functions has no percentage for either: the
+# validator must read instrumented 0/0 from the target's raw summary, not infer
+# 100% from missing work or accept a report's self-attested denominator.
+VRN="$WORK/verify-na/docs/ddw"; mkdir -p "$VRN/reports" "$VRN/prd" "$VRN/specs"
+cp "$VP/docs/ddw/prd/prd-FEAT-001.md" "$VRN/prd/prd-FEAT-001.md"
+cp "$VS/spec-FEAT-001.md" "$VRN/specs/spec-FEAT-001.md"
+sed -e 's/- branch: 91%/- Branch coverage: N\/A (0\/0 instrumented branches)/' \
+    -e 's/- function: 100%/- Function coverage: N\/A (0\/0 instrumented functions)/' \
+    "$VRP/verify-FEAT-001.md" > "$VRN/reports/verify-FEAT-001.md"
+cat >> "$VRN/reports/verify-FEAT-001.md" <<'COVERNA'
+| Coverage target | app/routes/public.py |
+| Coverage command | pytest --cov=app --cov-report=json-summary |
+| Coverage evidence | `coverage-summary.json` |
+| Behavior test | test_email_invalido_devuelve_422 — passed |
+COVERNA
+cat > "$VRN/reports/coverage-summary.json" <<'COVRAW'
+{"app/routes/public.py":{"lines":{"covered":94,"total":100},"branches":{"covered":0,"total":0},"functions":{"covered":0,"total":0}}}
+COVRAW
+VNOUT="$(python3 "$SELF/ddw/scripts/validate_verify.py" "$VRN/reports/verify-FEAT-001.md" --tier FEATURE 2>/dev/null || true)"
+case "$VNOUT" in
+  *"✅ F-VER-03"*"N/A"*) ok "an instrumented 0/0 in a named target is N/A, not 100%" ;;
+  *) bad "a measured zero-denominator metric with a behavior test was refused" ;;
+esac
+sed 's/"covered":0,"total":0/"covered":1,"total":2/' \
+    "$VRN/reports/coverage-summary.json" > "$VRN/reports/wrong-coverage.json"
+mv "$VRN/reports/wrong-coverage.json" "$VRN/reports/coverage-summary.json"
+VNOUT="$(python3 "$SELF/ddw/scripts/validate_verify.py" "$VRN/reports/verify-FEAT-001.md" --tier FEATURE 2>/dev/null || true)"
+case "$VNOUT" in
+  *"❌ F-VER-03"*"branch"*) ok "a claim of 0/0 fails when the instrument measured branches" ;;
+  *) bad "a claim of absent branches passed over raw counts that measure branches" ;;
+esac
+cat > "$VRN/reports/coverage-summary.json" <<'COVRAW'
+{"app/routes/public.py":{"lines":{"covered":94,"total":100},"branches":{"covered":0,"total":0},"functions":{"covered":0,"total":0}}}
+COVRAW
+sed 's/N\/A (0\/0 instrumented branches)/100% (0\/0 branches)/' \
+    "$VRN/reports/verify-FEAT-001.md" > "$VRN/reports/invalid.md"
+VNOUT="$(python3 "$SELF/ddw/scripts/validate_verify.py" "$VRN/reports/invalid.md" --tier FEATURE \
+         --prd "$VRN/prd/prd-FEAT-001.md" --spec "$VRN/specs/spec-FEAT-001.md" 2>/dev/null || true)"
+case "$VNOUT" in
+  *"❌ F-VER-03"*"0/0"*) ok "100% over 0/0 cannot be disguised as branch coverage" ;;
+  *) bad "the validator accepted an undefined 100% over 0/0" ;;
+esac
+
+sed -e 's/| Branch coverage | 81% |/| Branch coverage | N\/A (0\/0 instrumented branches) |/' \
+    -e 's/| Function coverage | 92% |/| Function coverage | N\/A (0\/0 instrumented functions) |/' \
+    "$VP/docs/ddw/reports/tests-FEAT-001.md" > "$VRN/reports/tests-FEAT-001.md"
+cat >> "$VRN/reports/tests-FEAT-001.md" <<'TESTNA'
+| Coverage target | app/routes/public.py |
+| Coverage command | pytest --cov=app --cov-report=json-summary |
+| Coverage evidence | `coverage-summary.json` |
+| Behavior test | test_campo_faltante_devuelve_400 — passed |
+TESTNA
+cat > "$VRN/reports/coverage-summary.json" <<'COVRAW'
+{"app/routes/public.py":{"lines":{"covered":87,"total":100},"branches":{"covered":0,"total":0},"functions":{"covered":0,"total":0}}}
+COVRAW
+TNOUT="$(python3 "$SELF/ddw/scripts/validate_tests.py" "$VRN/reports/tests-FEAT-001.md" 2>/dev/null || true)"
+case "$TNOUT" in
+  *"✅ F-TEST-04"*"N/A"*) ok "the test-report gate accepts absent branches and functions only with raw 0/0 evidence" ;;
+  *) bad "the test-report gate refused measured N/A despite the target's 0/0 artifact" ;;
+esac
+cat >> "$VRN/reports/tests-FEAT-001.md" <<'GLOBALBASELINE'
+Global app baseline: 37% de líneas y 50% de funciones, fuera del target de este fix.
+GLOBALBASELINE
+cat >> "$VRN/reports/verify-FEAT-001.md" <<'GLOBALBASELINE'
+Global app baseline: 37% de líneas y 50% de funciones, fuera del target de este fix.
+GLOBALBASELINE
+TNOUT="$(python3 "$SELF/ddw/scripts/validate_tests.py" "$VRN/reports/tests-FEAT-001.md" 2>/dev/null || true)"
+cat > "$VRN/reports/coverage-summary.json" <<'COVRAW'
+{"app/routes/public.py":{"lines":{"covered":94,"total":100},"branches":{"covered":0,"total":0},"functions":{"covered":0,"total":0}}}
+COVRAW
+VNOUT="$(python3 "$SELF/ddw/scripts/validate_verify.py" "$VRN/reports/verify-FEAT-001.md" --tier FEATURE 2>/dev/null || true)"
+cat > "$VRN/reports/coverage-summary.json" <<'COVRAW'
+{"app/routes/public.py":{"lines":{"covered":87,"total":100},"branches":{"covered":0,"total":0},"functions":{"covered":0,"total":0}}}
+COVRAW
+case "$TNOUT:$VNOUT" in
+  *"✅ F-TEST-04"*"N/A"*"✅ F-VER-03"*"N/A"*) ok "local N/A does not mistake separately stated global coverage for its own target" ;;
+  *) bad "global baseline prose contradicted a separately measured local N/A" ;;
+esac
+sed 's/N\/A (0\/0 instrumented branches)/100%/' \
+    "$VRN/reports/verify-FEAT-001.md" > "$VRN/reports/numeric.md"
+sed 's/N\/A (0\/0 instrumented branches)/100%/' \
+    "$VRN/reports/tests-FEAT-001.md" > "$VRN/reports/tests-numeric-FEAT-001.md"
+cat > "$VRN/reports/coverage-summary.json" <<'COVRAW'
+{"app/routes/public.py":{"lines":{"covered":94,"total":100},"branches":{"covered":1,"total":2},"functions":{"covered":0,"total":0}}}
+COVRAW
+VNOUT="$(python3 "$SELF/ddw/scripts/validate_verify.py" "$VRN/reports/numeric.md" --tier FEATURE \
+         --prd "$VRN/prd/prd-FEAT-001.md" --spec "$VRN/specs/spec-FEAT-001.md" 2>/dev/null || true)"
+cat > "$VRN/reports/coverage-summary.json" <<'COVRAW'
+{"app/routes/public.py":{"lines":{"covered":87,"total":100},"branches":{"covered":1,"total":2},"functions":{"covered":0,"total":0}}}
+COVRAW
+TNOUT="$(python3 "$SELF/ddw/scripts/validate_tests.py" "$VRN/reports/tests-numeric-FEAT-001.md" 2>/dev/null || true)"
+case "$TNOUT" in
+  *"❌ F-TEST-04"*"branch"*)
+    case "$VNOUT" in
+      *"❌ F-VER-03"*"branch"*) ok "N/A for functions does not hide a fabricated branch percentage in either gate" ;;
+      *) bad "the verification gate accepted a fabricated branch percentage: $VNOUT" ;;
+    esac ;;
+  *) bad "the test-report gate accepted a fabricated branch percentage: $TNOUT" ;;
+esac
+cat > "$VRN/reports/coverage-summary.json" <<'COVRAW'
+{"app/routes/public.py":{"lines":{"covered":87,"total":100},"branches":{"covered":0,"total":0},"functions":{"covered":0,"total":0}}}
+COVRAW
+sed 's/N\/A (0\/0 instrumented branches)/100% (0\/0 branches)/' \
+    "$VRN/reports/tests-FEAT-001.md" > "$VRN/reports/tests-invalid.md"
+TNOUT="$(python3 "$SELF/ddw/scripts/validate_tests.py" "$VRN/reports/tests-invalid.md" 2>/dev/null || true)"
+case "$TNOUT" in
+  *"❌ F-TEST-04"*"0/0"*) ok "the test-report gate refuses a fabricated 100% over 0/0" ;;
+  *) bad "the test-report gate still accepts a fabricated 100% over 0/0" ;;
+esac
+sed -e 's/N\/A (0\/0 instrumented branches)/100% (no hay ramas de código)/' \
+    -e 's/N\/A (0\/0 instrumented functions)/100% (no hay funciones definidas)/' \
+    "$VRN/reports/tests-FEAT-001.md" > "$VRN/reports/tests-absence.md"
+TNOUT="$(python3 "$SELF/ddw/scripts/validate_tests.py" "$VRN/reports/tests-absence.md" 2>/dev/null || true)"
+case "$TNOUT" in
+  *"❌ F-TEST-04"*"branch"*"function"*) ok "absence stated in words cannot masquerade as 100% in a test report" ;;
+  *) bad "a report that says no branches or functions still reports 100%" ;;
+esac
+cat > "$VRN/reports/coverage-summary.json" <<'EMPTYLINES'
+{"app/routes/public.py":{"lines":{"covered":0,"total":0},"branches":{"covered":0,"total":0},"functions":{"covered":0,"total":0}}}
+EMPTYLINES
+TNOUT="$(python3 "$SELF/ddw/scripts/validate_tests.py" "$VRN/reports/tests-FEAT-001.md" 2>/dev/null || true)"
+VNOUT="$(python3 "$SELF/ddw/scripts/validate_verify.py" "$VRN/reports/verify-FEAT-001.md" --tier FEATURE 2>/dev/null || true)"
+case "$TNOUT:$VNOUT" in
+  *"❌ F-TEST-04"*"line"*"❌ F-VER-03"*"line"*) ok "N/A cannot green either gate over an uninstrumented 0/0 line baseline" ;;
+  *) bad "an uninstrumented 0/0 line baseline passed one of the coverage gates" ;;
 esac
 
 # The report written in the shape the verify SKILL mandates, with every

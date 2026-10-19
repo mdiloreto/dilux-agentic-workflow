@@ -8,8 +8,9 @@ repository is the failure `docs/RATIONALE.md` decision 2 refuses. The numbers in
 the report are the model's account of a run it did.
 
 What stops being optional is the account itself: which runner, the exact command,
-how many tests ran and how many passed, every failure named, coverage stated as
-three numbers against a floor that is quoted rather than invented, and every skip
+how many tests ran and how many passed, every failure named, measured coverage
+against a floor that is quoted rather than invented (or evidenced 0/0 for absent
+branches/functions), and every skip
 carrying a reason. A run reported as "tests pass" is not a report — it is the
 sentence a gate used to turn true on, and this is the artifact that replaces it.
 
@@ -31,6 +32,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ddw_receipt  # noqa: E402 — same directory, resolved above
+from validate_verify import _coverage_na
 
 # `| Runner | pytest |`, `Runner: pytest`, `**Runner:** pytest` — the shape the
 # model reaches for varies and the field is what matters.
@@ -179,7 +181,7 @@ def main():
                           "failures heading. A count with no test IDs is a number the fix loop "
                           "cannot work from, and names scattered elsewhere are not a failure list")
 
-    # F-TEST-04 / F-TEST-05: three coverage numbers, against a floor the report
+    # F-TEST-04 / F-TEST-05: measured coverage, against a floor the report
     # quotes rather than invents. The floor belongs to the project — AGENTS.md or
     # the spec — and a report that picks its own passes itself.
     # `Line` and `Lines` both, because a report whose coverage is a two-column
@@ -190,13 +192,17 @@ def main():
     branch = _number(text, "Branch coverage", "Cobertura de ramas", "Branches", "Branch")
     func = _number(text, "Function coverage", "Cobertura de funciones", "Functions", "Function")
     have = [(n, v) for n, v in (("line", line), ("branch", branch), ("function", func))]
-    absent = [n for n, v in have if v is None]
-    if absent:
+    non_applicable, coverage_errors = _coverage_na(text, args.report)
+    absent = [n for n, v in have if v is None and n not in non_applicable]
+    if coverage_errors:
+        fail("F-TEST-04", "; ".join(coverage_errors))
+    elif absent:
         fail("F-TEST-04", "coverage missing for: " + ", ".join(absent)
-                          + ". Three numbers, because one of them hides the other two")
+                          + ". Three metrics, because one of them hides the other two")
     else:
-        ok("F-TEST-04", f"coverage stated: line {line:.0f}%, branch {branch:.0f}%, "
-                        f"function {func:.0f}%")
+        values = ", ".join(f"{name} N/A (0/0 instrumented)" if name in non_applicable
+                           else f"{name} {value:.0f}%" for name, value in have)
+        ok("F-TEST-04", "coverage stated: " + values)
 
     floor_raw = _field(text, "Coverage floor", "Piso de cobertura", "Floor")
     floor_m = re.search(r"(\d+(?:\.\d+)?)", floor_raw)
@@ -263,8 +269,8 @@ def main():
                           "from (AGENTS.md, the spec, or the method default), or it is a number "
                           "this report chose for itself")
 
-    if floor is not None and not absent:
-        under = [f"{n} {v:.0f}%" for n, v in have if v < floor]
+    if floor is not None and not absent and not coverage_errors:
+        under = [f"{n} {v:.0f}%" for n, v in have if v is not None and v < floor]
         if under:
             fail("F-TEST-04", f"coverage under the floor of {floor:.0f}%: " + ", ".join(under))
 
@@ -307,7 +313,7 @@ def main():
     print(f"Result: {verdict}")
     print("Scope: DDW does NOT run your suite. This checks the REPORT of the run you did — the "
           "runner and command\n       named, the counts adding up, failures identified, three "
-          "coverage numbers against a quoted floor,\n       skips explained. The numbers remain "
+          "coverage metrics against a quoted floor,\n       skips explained. The figures remain "
           "your model's account. A complete report can still be a false one.")
 
     try:
