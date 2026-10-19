@@ -676,6 +676,40 @@ def test_un_indice_que_particiona_pasa(tmp_path):
     assert r.returncode == 0, "the healthy index was refused: " + "\n".join(refused)
 
 
+def test_un_hijo_con_ac_globales_no_contiguos_pasa(tmp_path):
+    index = INDICE.replace("AC-01, AC-02, AC-03", "AC-01, AC-03").replace(
+        "AC-04, AC-05", "AC-02, AC-04, AC-05")
+    (tmp_path / "prd-FEAT-001.md").write_text(index, encoding="utf-8")
+    child = _fixture('cat > "$VP/docs/ddw/prd/prd-FEAT-001.md" <<\'PRDEOF\'',
+                     "PRDEOF").replace("AC-02 (FR-01)", "AC-03 (FR-01)")
+    result, refused = _validate(tmp_path, "validate_prd.py", "prd-FEAT-001a.md", child)
+    assert result.returncode == 0, "a split child cannot keep its globally assigned ACs: " + "\n".join(refused)
+    assert "ACs match split index" in result.stdout
+
+
+def test_un_hijo_no_puede_tomar_un_ac_de_otro_sub_ticket(tmp_path):
+    (tmp_path / "prd-FEAT-001.md").write_text(INDICE, encoding="utf-8")
+    child = _fixture('cat > "$VP/docs/ddw/prd/prd-FEAT-001.md" <<\'PRDEOF\'',
+                     "PRDEOF").replace("AC-02 (FR-01)", "AC-04 (FR-01)")
+    _, refused = _validate(tmp_path, "validate_prd.py", "prd-FEAT-001a.md", child)
+    assert _refuses(refused, "F-PRD-05") and "split index AC mismatch" in "\n".join(refused)
+
+
+def test_un_hijo_no_acepta_una_fila_de_indice_que_apunta_a_otro_prd(tmp_path):
+    index = INDICE.replace("prd-FEAT-001a.md", "prd-FEAT-001x.md")
+    (tmp_path / "prd-FEAT-001.md").write_text(index, encoding="utf-8")
+    child = _fixture('cat > "$VP/docs/ddw/prd/prd-FEAT-001.md" <<\'PRDEOF\'', "PRDEOF")
+    _, refused = _validate(tmp_path, "validate_prd.py", "prd-FEAT-001a.md", child)
+    assert _refuses(refused, "F-PRD-05") and "points to" in "\n".join(refused)
+
+
+def test_un_indice_no_acepta_dos_filas_para_el_mismo_sub_ticket(tmp_path):
+    duplicate = "| FEAT-001b | Otra fila | prd-FEAT-001b.md | | none | pending |\n"
+    index = INDICE + duplicate
+    _, refused = _indice(tmp_path, index)
+    assert _refuses(refused, "F-PRD-10") and "multiple rows" in "\n".join(refused)
+
+
 def test_un_criterio_que_no_se_lleva_nadie_es_rechazado(tmp_path):
     """F-PRD-10. It is the one loss the split can cause that afterwards
     cannot be detected from anywhere: the original no longer exists."""
