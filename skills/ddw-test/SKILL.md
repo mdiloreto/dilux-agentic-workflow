@@ -75,6 +75,15 @@ Runs the project's tests. Generates missing tests where needed. A blocking gate.
 > floor the project set rather than one the report chose. The numbers stay yours. What they can no
 > longer be is absent.
 
+> **Zero denominators are not 100%.** If the measured target has no branches or functions,
+> write `N/A (0/0 instrumented branches)` or `N/A (0/0 instrumented functions)`, never a percentage.
+> Include `Coverage target` (the exact JSON-summary key), `Coverage command`, `Coverage evidence`
+> (a backticked path to the raw JSON summary next to this report) and `Behavior test` with a passing
+> verdict. F-TEST-04 checks the counters for that target; an independent reviewer must confirm that
+> the artifact came from that run, the target is modified code, nonzero measured lines agree with
+> the reported percentage, and the behavior test passed. Lines
+> always need a measurable percentage. Local N/A does not establish global coverage.
+
 ### The report, in the shape the validator reads
 
 Everything above was prose, and a report has to be parsed. Three plausible renderings of the same

@@ -40,8 +40,14 @@ spec. A blocking gate.
    - Does every test the spec listed exist and pass? Those are approved commitments.
 
 3. **Verify coverage** (F-VER-03):
-   - Lines ≥ 80%, branches ≥ 80%, functions ≥ 80% over the new/modified code. Below any of them is a
-     FAIL, not a warning.
+    - Lines, branches and functions over the new/modified code must meet the project's floor (80%
+      by default). Below any measured floor is a FAIL. For absent branches/functions alone, use
+      `N/A (0/0 instrumented branches/functions)`, never 100%, and include `Coverage target`,
+      `Coverage command`, `Coverage evidence` (a backticked path to the JSON summary next to the
+      verdict), and `Behavior test` with a passing verdict. Inspect the raw artifact and confirm
+      that it measures this modified target, nonzero lines agree with the reported percentage,
+      and the named behavioral test really passed.
+      Report global coverage separately; N/A is not a claim of global compliance.
    - Core business logic between 80–90% is a WARNING (W-VER-02): it should be higher.
 
 4. **Verify sad paths** (F-VER-04):
@@ -80,8 +86,10 @@ the VERIFY→CLOSEOUT transition refuses.
 runner, your directory or your environment, and a gate that cannot be satisfied honestly gets
 satisfied dishonestly (`docs/RATIONALE.md` decisions 2 and 16). The script checks that the verdict is
 **complete**: that no acceptance criterion is missing from it, no block or fix-plan step is unaccounted for, the three
-coverage numbers are stated and clear the minimum, and lint and the sad paths have an answer instead
-of a silence. The numbers themselves remain your report of what you ran. Say that plainly to the
+  measured coverage numbers clear the minimum or absent branches/functions carry instrumented 0/0
+  evidence and a passing behavior-test claim, and lint and the sad paths have an answer instead
+  of a silence. The script cross-checks the N/A counters against a JSON artifact, not its provenance;
+  the independent reviewer must inspect that artifact and test run. Say that plainly to the
 user rather than letting the receipt imply more.
 
 **Every ❌ from the script is a mandatory loop** — but the loop is on the *report*, not the code:

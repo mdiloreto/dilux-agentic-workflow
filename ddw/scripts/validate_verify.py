@@ -24,6 +24,7 @@ Exit: 0 = PASSED (warnings allowed) · 2 = FAILED · 3 = cannot read/parse.
 
 import argparse
 import hashlib
+import json
 import os
 import re
 import sys
@@ -187,6 +188,88 @@ def _coverage(text):
         if m:
             out[key] = float(m.group(1).replace(",", "."))
     return out
+
+
+def _coverage_na(text, report_path):
+    non_applicable, errors = set(), []
+    for key, pat in (("line", r"(?:line|l[ií]nea)s?"),
+                     ("branch", r"(?:branch|rama)s?"),
+                     ("function", r"(?:function|funci[oó]n|funciones)")):
+        rows = [line for line in text.splitlines()
+                if re.search(pat, line, re.IGNORECASE)
+                and re.search(r"coverage|cobertura", line, re.IGNORECASE)
+                and (re.search(r"\bN\s*/\s*A\b", line, re.IGNORECASE)
+                     or re.search(r"(?<!\d)0\s*/\s*0(?!\d)", line)
+                     or re.search(r"\b(?:sin|no hay|no)\s+(?:\w+\s+){0,3}"
+                                  r"(?:ramas|funciones|branches|functions)\b", line, re.IGNORECASE))]
+        if not rows:
+            continue
+        if len(rows) != 1:
+            errors.append(f"{key}: ambiguous zero-denominator coverage rows")
+            continue
+        row = rows[0]
+        if key == "line" or not re.search(r"\bN\s*/\s*A\b", row, re.IGNORECASE) \
+                or not re.search(r"(?<!\d)0\s*/\s*0(?!\d)", row) or "%" in row \
+                or not re.search(r"instrumented|instrumentad", row, re.IGNORECASE):
+            errors.append(f"{key}: absent/0/0 is undefined, not a percentage; N/A requires an instrumented zero denominator")
+        else:
+            non_applicable.add(key)
+            other_rows = [line for line in text.splitlines()
+                           if line != row and "%" in line and re.match(
+                               r"^[ \t]*(?:[-*][ \t]*)?\|?[ \t]*\*{0,2}(?:" + pat
+                               + r"[ \t]+(?:coverage|cobertura)|cobertura\s+de\s+" + pat
+                               + r")(?:\*{0,2}[ \t]*[:|]|:\*{0,2})", line, re.IGNORECASE)]
+            if other_rows:
+                errors.append(f"{key}: N/A contradicts a percentage in another metric row")
+
+    if non_applicable:
+        fields = {}
+        for label, pattern in (("target", r"Coverage target|Objetivo de cobertura"),
+                               ("command", r"Coverage command|Comando de cobertura"),
+                               ("evidence", r"Coverage evidence|Evidencia de cobertura"),
+                               ("behavior test", r"Behavior test|Prueba de comportamiento")):
+            match = re.search(r"^\|\s*(?:" + pattern + r")\s*\|\s*([^|]+)\|",
+                              text, re.MULTILINE | re.IGNORECASE)
+            fields[label] = match.group(1).strip() if match else ""
+            if not fields[label]:
+                errors.append(f"N/A requires a {label} in the report")
+        evidence = re.fullmatch(r"`([^`]+)`", fields["evidence"])
+        if evidence:
+            base = os.path.realpath(os.path.dirname(os.path.abspath(report_path)))
+            artifact = os.path.realpath(os.path.join(base, evidence.group(1)))
+            if os.path.commonpath((base, artifact)) != base or not os.path.isfile(artifact):
+                errors.append("coverage evidence must be an existing file beside the report")
+            else:
+                try:
+                    with open(artifact, encoding="utf-8") as source:
+                        summary = json.load(source)
+                    measured = summary[fields["target"]]
+                    lines = measured["lines"]
+                    reported = _coverage(text)
+                    line_pct = reported.get("line")
+                    if type(lines["covered"]) is not int or type(lines["total"]) is not int \
+                            or lines["total"] <= 0 or not 0 <= lines["covered"] <= lines["total"] \
+                            or line_pct is None or abs(line_pct - 100 * lines["covered"] / lines["total"]) > 0.51:
+                        errors.append("line: evidence has no measured lines or contradicts the reported percentage")
+                    for key in ("branch", "function"):
+                        metric = measured[key + "es" if key == "branch" else key + "s"]
+                        covered, total = metric["covered"], metric["total"]
+                        if key in non_applicable and (type(covered) is not int or type(total) is not int
+                                                      or covered != 0 or total != 0):
+                            errors.append(f"{key}: evidence does not measure 0/0 for the target")
+                        elif key not in non_applicable and (type(covered) is not int or type(total) is not int
+                                                        or total <= 0 or not 0 <= covered <= total
+                                                        or reported.get(key) is None
+                                                        or abs(reported[key] - 100 * covered / total) > 0.51):
+                            errors.append(f"{key}: evidence contradicts the reported percentage for the target")
+                except (OSError, UnicodeError, ValueError, KeyError, TypeError) as exc:
+                    errors.append(f"coverage evidence cannot verify target and 0/0 metrics: {exc}")
+        elif fields["evidence"]:
+            errors.append("coverage evidence must name a file in backticks beside the report")
+        if fields["behavior test"] and not re.search(r"\b(?:pass(?:ed|es)?|pasa)\b|✅",
+                                                       fields["behavior test"], re.IGNORECASE):
+            errors.append("N/A behavior test must carry a passing verdict")
+    return non_applicable, errors
 
 
 def _find(path_of_report, name_pattern, subdir, stems):
@@ -370,20 +453,28 @@ def main():
     # PROJECT's floor, read from AGENTS.md §Testing, 80 when it states none.
     minimum = _project_floor(args.report)
     cov = _coverage(text)
-    absent = [k for k in ("line", "branch", "function") if k not in cov]
-    if absent:
+    non_applicable, coverage_errors = _coverage_na(text, args.report)
+    absent = [k for k in ("line", "branch", "function")
+              if k not in cov and k not in non_applicable]
+    if coverage_errors:
+        fail("F-VER-03", "; ".join(coverage_errors))
+    elif absent:
         fail("F-VER-03", f"coverage not stated for: {', '.join(absent)} "
                          f"(the report has to carry all three)")
     else:
-        below = [f"{k} {v:.0f}%" for k, v in cov.items() if v < minimum]
+        below = [f"{k} {v:.0f}%" for k, v in cov.items()
+                 if k not in non_applicable and v < minimum]
         if below:
             src = "AGENTS.md §Testing" if minimum != 80.0 else "the method default"
             fail("F-VER-03", f"coverage below the {minimum:.0f}% minimum ({src}): "
                              + ", ".join(below))
         else:
-            ok("F-VER-03", "line, branch and function coverage all stated and ≥ %.0f%%"
-                           % minimum)
-        business = [f"{k} {v:.0f}%" for k, v in cov.items() if minimum <= v < 90]
+            note = ("; " + ", ".join(sorted(non_applicable)) + " N/A (0/0 instrumented, "
+                    "raw evidence and passing behavior test named — independent reviewer must "
+                    "check both)") if non_applicable else ""
+            ok("F-VER-03", "measurable coverage stated and ≥ %.0f%%%s" % (minimum, note))
+        business = [f"{k} {v:.0f}%" for k, v in cov.items()
+                    if k not in non_applicable and minimum <= v < 90]
         if business:
             warn("W-VER-02", f"between {minimum:.0f}% and 90% — business logic should be "
                              "higher: " + ", ".join(business))
