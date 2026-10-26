@@ -482,12 +482,20 @@ refusing to ship.
   `/ddw-commit`, `/ddw-self-check`, `/ddw-status`
 - **Agents:** `ddw-implementer`, `ddw-module-verifier`, `ddw-arch-auditor`, `ddw-sec-auditor`
 - **Blocked:** modifying the PRD. Modifying specs. Committing before tests+SAST are green. PRs.
-- **Status line:** `💻 {TIER} · Implementing [3/5] · Block {n}/{total} | {ticket}: {title}`
+- **Status line:** `💻 {TIER} · Implementing [3/5] · Block {n}/{total} | {ticket}: {title}` for FEATURE; `💻 OPENSPEC-DIRECT · Implementing | {ticket}: {title}` in the direct lane.
 - **FIRST action:** `/ddw-validate-arch` BEFORE writing code.
-- **Per block:** dispatch `ddw-implementer`, then review in two stages (`ddw-module-verifier` for
+- **Per FEATURE block:** dispatch `ddw-implementer`, then review in two stages (`ddw-module-verifier` for
   spec compliance, `ddw-arch-auditor` for quality). Details in `.ddw/rules/code.instructions.md`.
 - **On finishing:** `/ddw-test` → PASS + `/ddw-security-sast` → PASS (BLOCKING GATE).
-- **Exit:** `tests` and `sast` gates present + user confirms (not under `minimal` — see § Autonomy) → `phase`→`VERIFY`.
+- **Exit:** `tests` and `sast` gates present + user confirms (not under `minimal` — see § Autonomy) → `phase`→`VERIFY` for FEATURE/FIX or `CLOSEOUT` for OPENSPEC-DIRECT.
+
+**When tier is `OPENSPEC-DIRECT`:** read every `openspec/specs/*/spec.md`, inventory
+implemented versus outstanding requirements and implement only the ticket's
+selected slice. Skip DEFINE, PLAN and VERIFY: no DAW PRD, proposed OpenSpec
+change, DAW execution spec, spec validator or module-verifier is owed. Use the
+direct-tier section of `code.instructions.md`; keep `ddw-validate-arch`,
+`ddw-test` and `ddw-security-sast`. The graph permits CODE→CLOSEOUT only after
+the `tests` and `sast` gates. Do not claim `define`, `spec`, `threat` or `verify`.
 
 ---
 

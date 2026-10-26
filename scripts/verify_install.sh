@@ -30,7 +30,7 @@ set -uo pipefail
 # a knob anyone could turn from outside the file. `docs/AI-POLICY.md` and
 # `CONTRIBUTING.md` both name this variable as the thing not to soften; it was
 # softenable without editing the file they were talking about.
-EXPECT_CHECKS=672
+EXPECT_CHECKS=673
 EXPECT_SKILLS=20
 EXPECT_AGENTS=5
 EXPECT_RULES=14
@@ -40,7 +40,7 @@ EXPECT_ADAPTERS=6
 # `--check-anchors`, `--cover` and every check in this file green, and the
 # published percentage went on being a percentage of a smaller list. The same
 # reason `EXPECT_CHECKS` exists, one file over.
-EXPECT_MUTATIONS=793
+EXPECT_MUTATIONS=795
 
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # EXPORTED, because the Python blocks below anchor their own temporary
@@ -735,7 +735,15 @@ PYTIERS
 # that never reach the total this file pins.
 for PAIR in $TIER_DESTS; do
   TIER="${PAIR%%:*}"; DEST="${PAIR##*:}"
-  python3 "$TR" --to CLASSIFY --action req --ticket T-1 --graph "$G" > "$R/.ddw-state.json" 2>/dev/null
+  ST="$R/.ddw-state.json"
+  if [ "$TIER" = "OPENSPEC-DIRECT" ]; then
+    D="$R/direct-baseline"
+    mkdir -p "$D/openspec/specs/payments"
+    printf '## Specification framework\nSpec format: OpenSpec\n' > "$D/AGENTS.md"
+    printf '# Payments\n' > "$D/openspec/specs/payments/spec.md"
+    ST="$D/.ddw-state.json"
+  fi
+  python3 "$TR" --to CLASSIFY --action req --ticket T-1 --graph "$G" --state "$ST" > "$ST" 2>/dev/null
   # FREE is the one tier whose edge costs the user's own words, quoted. Every
   # other tier takes any action at all, and that asymmetry is the point: the
   # loop would pass just as well with `free: "…"` everywhere, and then nothing
@@ -743,7 +751,9 @@ for PAIR in $TIER_DESTS; do
   # has to ask for.
   CACT=c
   [ "$TIER" = "FREE" ] && CACT='free: "hacelo sin pipeline, me hago cargo"'
-  if python3 "$TR" --to "$DEST" --action "$CACT" --tier "$TIER" --title "the fixture ticket" --graph "$G" >/dev/null 2>&1; then
+  TIER_ARGS=(--tier "$TIER")
+  [ "$TIER" = "OPENSPEC-DIRECT" ] && TIER_ARGS=(--direct-openspec)
+  if python3 "$TR" --to "$DEST" --action "$CACT" "${TIER_ARGS[@]}" --title "the fixture ticket" --graph "$G" --state "$ST" >/dev/null 2>&1; then
     ok "tier $TIER: CLASSIFY->$DEST accepted"
   else
     bad "tier $TIER: CLASSIFY->$DEST REJECTED"
@@ -5629,9 +5639,8 @@ echo '{}' | python3 "$SELF/ddw/scripts/validate-transition.py" --mode post \
 # ── The commit convention, applied to the repository that publishes it ────────
 #
 # DDW requires `AI-assisted: yes` or `AI-full: yes` on every commit made with a
-# model, and forbids Co-Authored-By by name — authorship is where responsibility
-# sits, and a trailer naming the tool as an author spreads it onto something that
-# cannot hold it. That rule governed every repo DDW is installed in and nothing
+# model. A required Co-authored-by trailer may accompany but not replace that
+# disclosure. The rule governed every repo DDW is installed in and nothing
 # here. Driven against real commits, because a checker for git history that is
 # never handed any is a checker of nothing.
 section "The attribution rule holds in this repository too"
@@ -5780,10 +5789,7 @@ python3 "$SELF/scripts/check_commits.py" --repo "$CM" --since "$CM_BASE" >/dev/n
   && ok "an attributed commit passes" \
   || bad "the attribution check rejects a commit that carries the trailer it asks for"
 
-# Carries the right trailer AND the forbidden one, which is the realistic shape:
-# the harness appends Co-Authored-By by default and the author adds the
-# disclosure. Testing it without `AI-assisted` would pass for the other reason —
-# no attribution at all — and the Co-Authored-By rule would go unmeasured.
+# Carries both the disclosure and a model coauthor required by the harness.
 echo three > "$CM/a.txt"; git -C "$CM" add -A
 git -C "$CM" commit -q -F - <<'CMEOF'
 ✨ a change that discloses the help and still names the tool as an author
@@ -5792,15 +5798,19 @@ AI-assisted: yes
 Co-Authored-By: Some Model <noreply@example.com>
 CMEOF
 python3 "$SELF/scripts/check_commits.py" --repo "$CM" --since "$CM_BASE" >/dev/null 2>&1 \
-  && bad "Co-Authored-By passes — the tool is credited as an author and nothing objects" \
-  || ok "and a Co-Authored-By trailer is refused, by the rule DDW ships to everyone else"
+  && ok "and a model coauthor with disclosure is accepted" \
+  || bad "a model coauthor with disclosure was refused"
 
 git -C "$CM" reset -q --hard HEAD~1
 echo four > "$CM/a.txt"; git -C "$CM" add -A
-git -C "$CM" commit -q -m "✨ a change that discloses nothing at all"
+git -C "$CM" commit -q -F - <<'CMEOF'
+✨ a change that names only the model
+
+Co-authored-by: Some Model <noreply@example.com>
+CMEOF
 python3 "$SELF/scripts/check_commits.py" --repo "$CM" --since "$CM_BASE" >/dev/null 2>&1 \
-  && bad "a commit with no attribution trailer at all passes" \
-  || ok "and so is a commit that discloses nothing"
+  && bad "a model coauthor without disclosure passes" \
+  || ok "and a model coauthor cannot replace disclosure"
 
 # A range git cannot read is not a range that passed. This is what a shallow
 # clone produces, and reporting it as success is how the check disappears.
@@ -12342,7 +12352,7 @@ import os, re, subprocess, sys, tempfile
 src = sys.argv[1]
 skill = open(os.path.join(src, "skills/ddw-commit/SKILL.md"), encoding="utf-8").read()
 assert "Co-Authored-By" not in skill, \
-    "the template teaches a Co-Authored-By trailer, which scripts/check_commits.py refuses"
+    "the generic template must not invent a model identity"
 m = re.search(r"^AI-assisted:.*$", skill, re.M)
 assert m, "the template no longer carries the attribution trailer at all"
 # Through the checker, not against a string: a commit written the way the skill
