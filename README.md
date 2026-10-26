@@ -79,6 +79,10 @@ short lane, a feature gets the full run.
 
 → [**How it works, in detail**](docs/METHOD.md) — the phases, the tiers, the PRD, security.
 
+Projects with an existing OpenSpec baseline can opt into a direct implementation
+lane without DAW's feature/spec validation; tests and SAST still apply. See
+[OpenSpec integration](docs/OPENSPEC.md#direct-implementation-from-an-existing-baseline).
+
 ### The distinction the whole thing rests on
 
 A rule written in a prompt is a **promise**. The model can forget it, misread it, or decide this once

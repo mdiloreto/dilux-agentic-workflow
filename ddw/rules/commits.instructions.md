@@ -1,6 +1,6 @@
 ---
 applyTo: '**'
-version: 2.2.0
+version: 2.3.0
 ---
 
 # Commit and PR Conventions
@@ -143,9 +143,11 @@ line.
 
 **NEVER create a commit without one of these trailers.**
 
-**NEVER use `Co-Authored-By` as a trailer.** The DDW framework uses exclusively `AI-assisted: yes`
-or `AI-full: yes`. A `Co-Authored-By: Claude ...` trailer is a tool default that does NOT apply when
-DDW is active. Always ignore it.
+`Co-authored-by` is allowed when the coding environment requires attribution to
+a model whose contribution remains in the commit. It is **not** a substitute for
+`AI-assisted: yes` or `AI-full: yes`, and the configured human Git author still
+owns the commit. Do not add it for mere review, research or advice. If required,
+append it after the disclosure trailer, separated by a blank line.
 
 ## Full Examples
 

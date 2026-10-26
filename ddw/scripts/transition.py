@@ -430,7 +430,10 @@ def main():
                     help="Gate to drop (repeatable). The corrective loop VERIFY->CODE clears "
                          "tests and sast: the fix has to re-earn them.")
     ap.add_argument("--tier", choices=_tiers(), default=None,
-                    help="Tier of the work (enum). The only metadata the FSM needs to route the graph.")
+                     help="Tier of the work (enum). The only metadata the FSM needs to route the graph.")
+    ap.add_argument("--direct-openspec", action="store_true",
+                    help="From CLASSIFY, implement the existing openspec/specs/ baseline directly "
+                         "without DEFINE, PLAN, or spec validation. Tests and SAST remain gated.")
     ap.add_argument("--ticket", default=None,
                     help="The ticket this run belongs to. Set it on the edge that classifies the "
                          "request; a gate cannot be claimed without one, because the ticket is "
@@ -465,6 +468,12 @@ def main():
     args = ap.parse_args()
     if args.state is None:
         args.state = _default_state()
+    if args.direct_openspec:
+        if args.to != "CODE" or args.tier not in (None, "OPENSPEC-DIRECT"):
+            ap.error("--direct-openspec requires --to CODE and no other tier")
+        args.tier = "OPENSPEC-DIRECT"
+    elif args.tier == "OPENSPEC-DIRECT":
+        ap.error("OPENSPEC-DIRECT requires --direct-openspec")
 
     block_given = args.block is not None
     block_val = None

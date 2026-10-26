@@ -1,6 +1,6 @@
 ---
 applyTo: '**'
-version: 2.5.0
+version: 2.6.0
 ---
 
 # Phase 3: CODE (Implementation)
@@ -69,7 +69,8 @@ authorization.
 ## Session Recovery
 
 If this is a new session (the agent just started and `phase` was already `CODE`):
-1. Read the spec/fix-plan from `docs/ddw/specs/` (derived from the ticket).
+1. Read the spec/fix-plan from `docs/ddw/specs/` (derived from the ticket), or
+   all `openspec/specs/*/spec.md` when tier is `OPENSPEC-DIRECT`.
 2. Read `block` from the state to know which block we are on (e.g. `"2/5"`).
 3. Report the current state to the user before continuing.
 
@@ -84,6 +85,25 @@ If this is a new session (the agent just started and `phase` was already `CODE`)
    - **BLOCKED** until the existing violations are resolved, or documented as accepted technical
      debt.
 3. If it passes → continue with the implementation.
+
+---
+
+## If tier == OPENSPEC-DIRECT
+
+Read **all** capability specs in `openspec/specs/*/spec.md` and inspect the
+existing code. Identify the ticket's bounded, still-missing slice against
+those requirements. The OpenSpec baseline is input, not a new proposed change;
+do not create a DAW PRD, spec plan or OpenSpec change merely to clear a gate.
+If the baseline leaves a product decision unanswered or contradicts itself,
+stop and ask instead of inventing it. Do not modify `openspec/specs/` to
+pre-approve an implementation decision.
+
+Implement the slice with tests for its observable requirements. Review code
+quality and architecture independently; do not invoke the spec-based
+`ddw-module-verifier` or report a passed spec gate. Run `ddw-test` for the
+implementation and `ddw-security-sast` for the entire change, using their
+normal receipts. After both gates pass, transition directly to CLOSEOUT.
+This lane has no block marker, DEFINE, PLAN or VERIFY.
 
 ---
 
@@ -268,9 +288,10 @@ state's `block`. On resume, work continues from the last incomplete block.
 
 ## Closeout Sequence (MANDATORY, every tier that reaches CODE)
 
-> **Where it goes next depends on the tier.** QUICK-FIX has no VERIFY phase: it
-> transitions straight to **CLOSEOUT** (`CODE → CLOSEOUT`, gates `define`, `tests`,
-> `sast`). FIX and FEATURE go to **VERIFY** (`CODE → VERIFY`, gates `tests`,
+> **Where it goes next depends on the tier.** QUICK-FIX and OPENSPEC-DIRECT have
+> no VERIFY phase: they transition straight to **CLOSEOUT** (`CODE → CLOSEOUT`).
+> QUICK-FIX owes `define`, `tests` and `sast`; OPENSPEC-DIRECT owes only `tests`
+> and `sast`. FIX and FEATURE go to **VERIFY** (`CODE → VERIFY`, gates `tests`,
 > `sast`). The graph is the authority; taking the other edge is a refused write,
 > not a detour.
 

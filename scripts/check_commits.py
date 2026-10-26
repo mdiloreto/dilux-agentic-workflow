@@ -1,14 +1,9 @@
 #!/usr/bin/env python3
 """Hold this repository's commits to the attribution rule it publishes.
 
-`ddw/rules/commits.instructions.md` requires one of two trailers on any commit
-produced with AI assistance, and forbids `Co-Authored-By` by name. The
-distinction is the point, not the spelling:
-
-**`Co-Authored-By: <a model>` claims co-authorship.** Authorship is where
-responsibility sits, so a trailer naming the tool as an author spreads it onto
-something that cannot hold it — and "the AI wrote it" is exactly the answer
-`docs/AI-POLICY.md` opens by refusing to accept.
+`ddw/rules/commits.instructions.md` requires one of two disclosure trailers on
+any commit produced with AI assistance. A model coauthor trailer can accompany
+that disclosure when a coding harness requires it; it never replaces it.
 
 **`AI-assisted: yes` records assistance.** It says a model helped and a human
 read, understood and approved the result. One author, who signed; a disclosure
@@ -33,7 +28,6 @@ import subprocess
 import sys
 
 TRAILER = re.compile(r"^(?:AI-assisted|AI-full):\s*yes\s*$", re.M | re.I)
-COAUTHOR = re.compile(r"^Co-Authored-By:", re.M | re.I)
 
 
 def is_bot(name, email):
@@ -104,12 +98,7 @@ def main():
         checked += 1
         subject = body.strip().splitlines()[0] if body.strip() else "(no subject)"
         where = f"{sha[:9]} {subject[:60]}"
-        if COAUTHOR.search(body):
-            problems.append((where, "carries a Co-Authored-By trailer, which names the tool as "
-                                    "an author. Use `AI-assisted: yes` — it discloses the help "
-                                    "without moving the authorship, and the responsibility, off "
-                                    "the person who signed"))
-        elif not TRAILER.search(body):
+        if not TRAILER.search(body):
             problems.append((where, "has no `AI-assisted: yes` or `AI-full: yes` trailer. Every "
                                     "commit made with AI assistance carries one; this repository "
                                     "is not exempt from the rule it ships"))

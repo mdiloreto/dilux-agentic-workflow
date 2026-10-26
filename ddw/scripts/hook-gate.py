@@ -478,32 +478,27 @@ def commit_verdict(repo, command, require_seal=True):
             "CLASSIFY with the cost stated, not something to infer from impatience.")
     # The trailers, which is the only part of the message a gate can judge.
     #
-    # `commits.instructions.md` says it in capitals — NEVER `Co-Authored-By`;
-    # DDW discloses with `AI-assisted: yes` — and nothing read the file it was
-    # written about. Measured live on Copilot: the model composed the message,
-    # the user approved it, and it carried
-    # `Co-authored-by: Copilot <…@users.noreply.github.com>`, which is the tool's
-    # own default doing what the rule forbids. Every commit in the repository's
-    # history then carries an attribution its own method rejects.
-    #
-    # Only the trailer is judged. What the body SAYS is the model's to write and
-    # the user's to approve; who it claims wrote the code is not.
+    # The proposal must carry the disclosure when an automation also requires
+    # a model coauthor trailer; one does not replace the other.
     try:
         with open(proposal, encoding="utf-8") as fh:
             body = fh.read()
     except OSError:
         body = ""
     bad = [m.group(0) for m in re.finditer(
-        r"^[ \t]*(Co-Authored-By|Signed-off-by-AI|🤖 Generated with[^\n]*)\s*:?[^\n]*$",
+        r"^[ \t]*(Signed-off-by-AI|🤖 Generated with[^\n]*)\s*:?[^\n]*$",
         body, re.IGNORECASE | re.MULTILINE)]
     if bad:
         return (
             "DDW: the message carries a trailer the method does not use: %s.\n"
-            "Disclosure in DDW is `AI-assisted: yes` (or `AI-full: yes`) and nothing else — "
-            "`Co-Authored-By` is your tool's default, not this repository's convention, and it "
-            "attributes authorship the project did not agree to. Take the line out of `%s`, show "
+            "Disclosure in DDW is `AI-assisted: yes` (or `AI-full: yes`). "
+            "Take the line out of `%s`, show "
             "the corrected message to the user, and commit that."
             % (", ".join(sorted({b.strip().split(":")[0] for b in bad})), rel))
+    if (re.search(r"^Co-authored-by:", body, re.IGNORECASE | re.MULTILINE)
+            and not re.search(r"^(AI-assisted|AI-full):\s*yes\s*$", body,
+                              re.IGNORECASE | re.MULTILINE)):
+        return "DDW: a Co-authored-by trailer cannot replace `AI-assisted: yes` or `AI-full: yes` in `%s`." % rel
 
     # NOT consumed here. This runs before `git commit` does, and the first
     # version unlinked proposal and seal at this point — so a commit that the

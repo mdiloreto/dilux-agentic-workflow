@@ -602,13 +602,13 @@ MUTATIONS = [
      edit("ddw/scripts/validate-transition.py",
           "    _check_free_is_the_users_word(old_state, new_state, appended, replaying=_replaying)",
           "    _check_free_is_the_users_word(old_state, new_state, appended)")),
-    ("the commit gate stops reading the trailers, and DDW signs its own commits the way its method forbids",
+    ("the commit gate stops reading forbidden signatures",
      edit("ddw/scripts/hook-gate.py",
-          '    bad = [m.group(0) for m in re.finditer(\n'
-          '        r"^[ \\t]*(Co-Authored-By|Signed-off-by-AI|🤖 Generated with[^\\n]*)\\s*:?[^\\n]*$",\n'
-          '        body, re.IGNORECASE | re.MULTILINE)]',
-          '    bad = []')),
-    ("the trailer check goes case-sensitive, and `Co-authored-by` — the spelling the tool actually writes — sails through",
+           '    bad = [m.group(0) for m in re.finditer(\n'
+           '        r"^[ \\t]*(Signed-off-by-AI|🤖 Generated with[^\\n]*)\\s*:?[^\\n]*$",\n'
+           '        body, re.IGNORECASE | re.MULTILINE)]',
+           '    bad = []')),
+    ("the forbidden-signature check goes case-sensitive and a lowercase signature sails through",
      edit("ddw/scripts/hook-gate.py",
           '        body, re.IGNORECASE | re.MULTILINE)]',
           '        body, re.MULTILINE)]')),
@@ -1670,12 +1670,12 @@ MUTATIONS = [
     # ── Attribution ──────────────────────────────────────────────────────────
     # The rule DDW ships to every repo it is installed in, applied here. Each of
     # these is a way the checker keeps returning success while checking nothing.
-    ("Co-Authored-By stops being refused, and the tool is credited as an author",
-     edit("scripts/check_commits.py", 'COAUTHOR = re.compile(r"^Co-Authored-By:", re.M | re.I)',
-          'COAUTHOR = re.compile(r"^Co-Authored-By-NEVER-MATCHES:", re.M | re.I)')),
+    ("a model coauthor replaces disclosure instead of accompanying it",
+     edit("scripts/check_commits.py", "        if not TRAILER.search(body):",
+          "        if not (TRAILER.search(body) or re.search(r'^Co-authored-by:', body, re.M | re.I)):")),
     ("a commit with no attribution at all stops being noticed",
-     edit("scripts/check_commits.py", "        elif not TRAILER.search(body):",
-          "        elif False:")),
+     edit("scripts/check_commits.py", "        if not TRAILER.search(body):",
+          "        if False:")),
     # The exemption exists so the weekly dependency PR is not red on arrival.
     # Losing it is not loud: nothing breaks until Monday, in a pull request
     # nobody is watching, and the rule people learn is "the check is always red".
@@ -2271,7 +2271,7 @@ MUTATIONS = [
      edit(".github/workflows/release.yml", "scripts/verify_install.sh", "true # scripts/verify_install.sh")),
     ("a skill's whole protocol is replaced by a placeholder",
      edit("skills/ddw-help/SKILL.md", "/ddw-self-check", "/ddw-selfcheck")),
-    ("the commit template teaches the trailer this repo refuses",
+    ("the commit template replaces required disclosure with a model trailer",
      edit("skills/ddw-commit/SKILL.md", "AI-assisted: yes",
           "Co-Authored-By: Claude <noreply@anthropic.com>")),
     ("the method resolves to the plugin even when the repo has its own copy",
@@ -3688,10 +3688,18 @@ MUTATIONS = [
           '    store_rows = _store_rows(ws_files.get(STORE_ROWS) or "")',
           "    store_rows = {}")),
     ("a renglón written against an older commit passes as current, and the lag "
-     "the analysis is written over becomes invisible",
-     edit("ddw/scripts/family_impact.py",
-          '                member["row_behind"] = bool(',
-          '                member["row_behind"] = False and bool(')),
+      "the analysis is written over becomes invisible",
+      edit("ddw/scripts/family_impact.py",
+           '                member["row_behind"] = bool(',
+           '                member["row_behind"] = False and bool(')),
+    ("OpenSpec direct entry accepts projects that never opted into OpenSpec",
+     edit("ddw/scripts/validate-transition.py",
+          '            if not openspec_bridge.opted_in(root):',
+          '            if False:')),
+    ("OpenSpec direct CODE closes without SAST evidence",
+     edit("ddw/rules/transition-graph.json",
+          '"gates": ["tests", "sast"]',
+          '"gates": ["tests"]')),
 ]
 
 

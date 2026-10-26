@@ -1,6 +1,6 @@
 ---
 applyTo: '**'
-version: 2.8.0
+version: 2.9.0
 ---
 
 # State — Schema and Management of `.ddw-state.json`
@@ -30,7 +30,7 @@ version: 2.8.0
 
 | Field | Type | Valid values | Description |
 |-------|------|--------------|-------------|
-| `tier` | `string \| null` | `"QUICK-FIX"`, `"FIX"`, `"FEATURE"`, `"DISCOVERY"`, `"FREE"`, `null` | Tier of the current work. `null` in IDLE. |
+| `tier` | `string \| null` | `"QUICK-FIX"`, `"FIX"`, `"FEATURE"`, `"OPENSPEC-DIRECT"`, `"DISCOVERY"`, `"FREE"`, `null` | Tier of the current work. `null` in IDLE. `OPENSPEC-DIRECT` is an explicit existing-baseline implementation lane: CLASSIFY→CODE→CLOSEOUT, with tests and SAST still required. |
 | `phase` | `string` | `"IDLE"`, `"CLASSIFY"`, `"DEFINE"`, `"PLAN"`, `"CODE"`, `"VERIFY"`, `"CLOSEOUT"`, `"DISCOVERY"`, `"FREE"` | Current phase of the state machine. |
 | `ticket` | `string \| null` | Tracker ID (e.g. `"PROJ-123"`) or internal (e.g. `"FIX-001"`, `"FEAT-001"`, `"DISC-001"`) | The ticket identifier. `null` in IDLE. |
 | `title` | `string \| null` | Free text | Descriptive title of the ticket. `null` in IDLE. |
