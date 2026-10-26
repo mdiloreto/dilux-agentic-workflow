@@ -74,6 +74,21 @@
     "FIX": {
       "extends": "FEATURE"
     },
+    "OPENSPEC-DIRECT": {
+      "CLASSIFY->CODE": {
+        "gates": []
+      },
+      "CODE->CLOSEOUT": {
+        "gates": ["tests", "sast"]
+      },
+      "CLOSEOUT->IDLE": {
+        "gates": ["commit", "pr"]
+      },
+      "CLOSEOUT->CODE": {
+        "gates": [],
+        "clears": ["tests", "sast", "commit", "pr"]
+      }
+    },
     "QUICK-FIX": {
       "CLASSIFY->DEFINE": {
         "gates": []

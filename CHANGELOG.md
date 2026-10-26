@@ -19,6 +19,21 @@ move at different speeds. So the promise is specific:
 
 ---
 
+## [0.60.0] - 2026-10-26
+
+### Added — direct implementation from an existing OpenSpec baseline
+
+- Explicit `--direct-openspec` ticket lane starts CODE from CLASSIFY when
+  `AGENTS.md` opts into OpenSpec and readable capabilities exist under
+  `openspec/specs/`. It skips DAW PRD, proposed change, spec plan and their
+  validators, while retaining tests, SAST, commit and PR gates. Autonomy is
+  selected independently per ticket.
+- Allow a model coauthor trailer alongside mandatory `AI-assisted` or `AI-full`
+  disclosure when an automation environment requires it; it never replaces
+  the disclosure or the configured human Git author.
+
+---
+
 ## [0.59.0] - 2026-10-20
 
 ### Added — a fully-autonomous mode

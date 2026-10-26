@@ -1199,6 +1199,34 @@ def validate(old_state, new_state, graph, tool_name=None, max_appended=1,
             continue
         if not isinstance(edge_cfg, dict):
             raise Block(f"malformed graph: the value of {key!r} is not an object")
+        if tier == "OPENSPEC-DIRECT" and key == "CLASSIFY->CODE" and idx >= skip_edges:
+            if not state_path:
+                raise Block("OpenSpec direct mode needs the repository state path")
+            root = os.path.dirname(os.path.abspath(state_path))
+            if not openspec_bridge.opted_in(root):
+                raise Block("OpenSpec direct mode requires AGENTS.md § Specification framework "
+                            "with Spec format: OpenSpec")
+            baseline = os.path.join(root, "openspec", "specs")
+            if (os.path.islink(os.path.join(root, "openspec")) or os.path.islink(baseline)
+                    or not os.path.isdir(baseline)):
+                raise Block("OpenSpec direct mode requires openspec/specs/ in this repository")
+            found = False
+            for directory, dirs, files in os.walk(baseline, followlinks=False):
+                for name in dirs + files:
+                    if os.path.islink(os.path.join(directory, name)):
+                        raise Block("symlink in openspec/specs/: " + name)
+                if os.path.dirname(directory) == baseline and "spec.md" in files:
+                    spec_file = os.path.join(directory, "spec.md")
+                    try:
+                        if not os.path.isfile(spec_file):
+                            raise OSError("not a regular file")
+                        with open(spec_file, encoding="utf-8") as fh:
+                            fh.read()
+                    except (OSError, UnicodeError) as exc:
+                        raise Block("unreadable OpenSpec baseline: " + spec_file) from exc
+                    found = True
+            if not found:
+                raise Block("openspec/specs/ has no capability spec.md files")
         gates_required = edge_cfg.get("gates", [])
         if not isinstance(gates_required, list):
             raise Block(f"malformed graph: the gates of {key!r} are not a list")
@@ -3237,6 +3265,8 @@ def decisions_record_missing(root, old_state, new_state):
     """
     old_h = old_state.get("history") or []
     new_h = new_state.get("history") or []
+    if (new_state.get("tier") or old_state.get("tier")) == "OPENSPEC-DIRECT":
+        return None
     if len(new_h) != len(old_h) + 1:
         return None
     entry = new_h[-1] if isinstance(new_h[-1], dict) else {}

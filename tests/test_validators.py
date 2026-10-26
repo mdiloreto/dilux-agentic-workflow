@@ -840,32 +840,26 @@ def test_un_commit_visto_y_contestado_pasa_al_primer_intento(tmp_path):
     assert _commit(tmp_path).returncode == 0, "the approved commit was refused anyway"
 
 
-def test_el_trailer_que_el_metodo_prohibe_no_pasa(tmp_path):
-    """`commits.instructions.md` says it in capitals — NEVER `Co-Authored-By`,
-    the disclosure is `AI-assisted: yes` — and no gate read the file that
-    rule talks about.
-
-    Measured live on Copilot: the model drafted the message, the user
-    approved it, and it carried `Co-authored-by: Copilot
-    <…@users.noreply.github.com>` — the tool's default doing exactly what the
-    rule forbids. Approved and all, that commit attributes an authorship the
-    project never agreed to.
-    """
+def test_coauthor_con_divulgacion_pasa_y_sin_ella_no(tmp_path):
     _repo_en_define(tmp_path)
-    malo = MENSAJE.rstrip("\n") + "\nCo-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>\n"
-    _propone(tmp_path, malo)
+    mensaje = MENSAJE.rstrip("\n") + "\nCo-authored-by: GPT-6 Sol <noreply@openai.com>\n"
+    _propone(tmp_path, mensaje)
     _habla_el_usuario(tmp_path)
     r = _commit(tmp_path)
-    assert r.returncode == 2, "the commit carried a Co-Authored-By the method forbids"
-    assert "AI-assisted" in (r.stdout + r.stderr), \
-        "the refusal does not say which trailer DOES go: " + (r.stdout + r.stderr)[-200:]
+    assert r.returncode == 0, "a disclosed coauthor was refused: " + (r.stdout + r.stderr)[-200:]
 
-    # …and the correct message still passes: what gets judged is the trailer,
-    # not the body. What the message SAYS belongs to the model and to the
-    # user who approves it.
-    _propone(tmp_path)
+    _propone(tmp_path, "feat(test): test\n\nCo-authored-by: GPT-6 Sol <noreply@openai.com>\n")
     _habla_el_usuario(tmp_path)
-    assert _commit(tmp_path).returncode == 0, "a legitimate message ended up refused"
+    r = _commit(tmp_path)
+    assert r.returncode == 2
+    assert "AI-assisted" in (r.stdout + r.stderr)
+
+
+def test_firma_ai_no_reemplaza_divulgacion(tmp_path):
+    _repo_en_define(tmp_path)
+    _propone(tmp_path, MENSAJE + "signed-off-by-ai: bot\n")
+    _habla_el_usuario(tmp_path)
+    assert _commit(tmp_path).returncode == 2
 
 
 def test_mostrar_un_mensaje_y_commitear_otro_es_rechazado(tmp_path):

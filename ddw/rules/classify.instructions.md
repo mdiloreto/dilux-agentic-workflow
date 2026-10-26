@@ -1,6 +1,6 @@
 ---
 applyTo: '**'
-version: 2.20.0
+version: 2.21.0
 ---
 
 # CLASSIFY Phase (Recognition and Classification)
@@ -276,6 +276,19 @@ Meets ANY of these criteria:
 - Requires a data migration
 - Examples: a new endpoint, a new page, a module refactor, integrating an external service
 
+### OPENSPEC-DIRECT (explicit opt-in)
+
+When the user explicitly asks to implement an existing OpenSpec baseline without
+DAW's PRD, proposed change, spec plan or feature/spec checks, offer this tier
+instead of FEATURE. It is not inferred merely from `Spec format: OpenSpec`.
+Require `AGENTS.md` § Specification framework with `Spec format: OpenSpec` and
+readable capabilities in `openspec/specs/*/spec.md`. Inventory **all** capability
+specs and compare them to existing code before choosing the ticket's slice;
+do not treat all capabilities as one new feature or implement already shipped work.
+Do not run `openspec validate`, `ddw-validate-prd`, `ddw-validate-spec` or
+`ddw-verify-module` for this tier. An existing proposed change is not the
+approved baseline. Tests, SAST, commit and PR gates remain in force.
+
 ### DISCOVERY
 Meets ANY of these criteria:
 - The user wants to explore an idea without implementing code yet
@@ -330,7 +343,7 @@ and want to define it before implementing?"
 If the classification is **QUERY**:
 - Answer per the rule defined above.
 - **Do NOT continue to Steps 3 through 6.** Those steps only apply to the stateful tiers
-  (QUICK-FIX, FIX, FEATURE, DISCOVERY, FREE).
+  (QUICK-FIX, FIX, FEATURE, OPENSPEC-DIRECT, DISCOVERY, FREE).
 - Do not touch `.ddw-state.json`. Do not change phase. Done.
 
 ---
@@ -353,6 +366,9 @@ Its PRD is already written. Continue with it?
 
 On confirmation: `ticket` = the sub-ticket ID, `title` from its PRD, `tracker` inherited from the
 parent, and **the tier is the parent's** — a split does not reclassify the work, it divides it.
+Exception: when the user explicitly selects OPENSPEC-DIRECT for an existing ticket,
+keep its ID, branch and dependency history but route from CLASSIFY to CODE using
+the current OpenSpec baseline; the existing DAW PRD is not a new gate.
 Then carry on with step 4.
 
 **Before the box, look up its dependencies — the answer is already on file.** The sub-PRD names
@@ -367,15 +383,16 @@ dependency is not merged, the box is where the user decides to wait or to branch
 dependency's branch — not a surprise at step 5.
 
 Two things not to do. Do not invent a fresh `FEAT-NNN` for work that already has a PRD: you end up
-with two tickets for one deliverable and the parent index pointing at neither. And do not skip
-DEFINE — the PRD gets re-validated there, always, for the reasons that phase gives.
+with two tickets for one deliverable and the parent index pointing at neither. In the ordinary
+FEATURE lane do not skip DEFINE — the PRD gets re-validated there. The explicitly
+selected OPENSPEC-DIRECT lane is the exception; it does not revalidate the PRD.
 
 If the user is clearly asking for something else, say what is pending in one line and get on with
 what they asked. This is a proposal, not a redirection.
 
 ### Then, for new work
 
-If the tier is stateful (QUICK-FIX, FIX, FEATURE, DISCOVERY or FREE), the ticket is resolved in
+If the tier is stateful (QUICK-FIX, FIX, FEATURE, OPENSPEC-DIRECT, DISCOVERY or FREE), the ticket is resolved in
 ONE stop — inside the Step 4 box — never in a chain of questions before it. Measured on a live
 run: "is there a ticket?", then "do you want me to propose one?", then "shall we use FEAT-001?"
 were three separate interruptions before the box asked a fourth, and every answer after the first
@@ -444,7 +461,7 @@ Only after the user confirms, **BEFORE updating the state:**
    not the base gets asked about, and local-only commits on the base
    (`git rev-list --count origin/{base}..{base}` ≠ 0) stop the creation until
    the user pushes them or owns carrying them into the ticket's PR.
-   - FEATURE → `feat/<ticket>-<short-name>`
+   - FEATURE and OPENSPEC-DIRECT → `feat/<ticket>-<short-name>`
    - FIX and QUICK-FIX → `fix/<ticket>-<short-name>`
    - DISCOVERY → `discovery/<ticket>-<short-name>`
 2. Confirm to the user: "Branch created: `[name]` from `[base]`"
@@ -496,11 +513,11 @@ somebody watched from one that did not have anyone to watch it.
 ## Step 6: Transition
 
 1. Update `.ddw-state.json`:
-   - `tier` → the confirmed tier (`"QUICK-FIX"`, `"FIX"`, `"FEATURE"`, `"DISCOVERY"` or
-     `"FREE"`)
+   - `tier` → the confirmed tier (including `"OPENSPEC-DIRECT"` only on explicit request)
    - `autonomy` → `"assisted"` unless the user asked for `"minimal"` or `"autonomous"` (see above)
    - `phase`:
      - For `QUICK-FIX`, `FIX`, `FEATURE` → `"DEFINE"`
+     - For `OPENSPEC-DIRECT` → `"CODE"`
      - For `DISCOVERY` → `"DISCOVERY"`
      - For `FREE` → `"FREE"`
    - `ticket` → the tracker ID if there is one (e.g. `"PROJ-123"`), or a sequential internal ID
@@ -517,6 +534,10 @@ somebody watched from one that did not have anyone to watch it.
    .ddw/scripts/transition.py --to DEFINE --tier <TIER> --ticket <ID> \
        --title "<the ticket's name, one line>" --action "<why this tier>"
    ```
+
+   For the direct OpenSpec tier use `--to CODE --direct-openspec` instead of
+   `--to DEFINE --tier <TIER>`. The helper and hook both require the OpenSpec
+   opt-in and a readable baseline; the option is not a global bypass.
 
    It prints the complete next state and self-validates against the graph first, so an illegal
    transition fails here rather than being refused by the hook afterwards. Paste its output in a

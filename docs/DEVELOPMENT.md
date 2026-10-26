@@ -330,9 +330,9 @@ Two narrow checkers for two things that rot without breaking anything. The first
 reads the version and the licence from the files that own them and compares every
 copy — a manifest saying `UNLICENSED` next to an Apache-2.0 `LICENSE` is what npm
 reads, and no test notices. The second holds a **range** of commits to
-`commits.instructions.md`: `AI-assisted:` or `AI-full:` where a model helped, and
-never `Co-Authored-By`, which credits the tool as an author and spreads
-responsibility onto something that cannot hold it. Only a range, never the
+`commits.instructions.md`: `AI-assisted:` or `AI-full:` where a model helped.
+An optional model `Co-authored-by` does not replace that disclosure or shift
+responsibility away from the human Git author. Only a range, never the
 history behind it — that cannot be rewritten without breaking every clone.
 
 One exemption, and it is printed rather than assumed: a commit authored by a bot

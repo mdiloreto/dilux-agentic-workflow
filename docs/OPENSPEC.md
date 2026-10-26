@@ -58,3 +58,23 @@ change. Editing the DAW plan or any file under that change invalidates the
 receipt and the `spec` gate. Return to PLAN, update the paired artifacts as
 needed, and validate again before CODE. This is the same existing gate, not a
 new workflow phase or a substitute for DAW validation.
+
+## Direct implementation from an existing baseline
+
+If the user explicitly opts in for a ticket, `OPENSPEC-DIRECT` skips DAW
+DEFINE, PLAN and VERIFY. In CLASSIFY read all `openspec/specs/*/spec.md`,
+identify which requirements are already implemented, and choose a bounded
+outstanding slice. Advance with:
+
+```sh
+.ddw/scripts/transition.py --to CODE --direct-openspec --ticket <ID> \
+  --title "<slice>" --autonomy autonomous --action "<reason>"
+```
+`autonomous` is optional and independent of the direct-spec tier.
+
+The entry checks the exact `AGENTS.md` OpenSpec opt-in and the presence of a
+readable baseline, **not** feature or spec validity. This mode does not require
+a new `openspec/changes/` delta, a DAW PRD/plan, OpenSpec validation, or
+spec-based module verification. CODE still owes test and SAST receipts before
+CLOSEOUT; CLOSEOUT still owes a commit and PR. If the baseline cannot resolve
+a requirement, stop and ask. No other tier changes its existing gates.

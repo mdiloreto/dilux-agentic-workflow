@@ -1,6 +1,6 @@
 ---
 applyTo: '**'
-version: 2.4.0
+version: 2.5.0
 ---
 
 # Phase 5: CLOSEOUT (Commit, PR and Closeout)
@@ -78,6 +78,8 @@ the step in silence.
      - A link to the spec/fix-plan (derived path: `docs/ddw/specs/spec-{ticket}.md` or
        `docs/ddw/specs/fix-{ticket}.md`).
      - A link to the PRD if there is one (derived path: `docs/ddw/prd/prd-{ticket}.md`).
+     - For OPENSPEC-DIRECT, link the selected `openspec/specs/*/spec.md` capabilities
+       instead; no DAW PRD or execution spec exists in this lane.
      - A summary of the changes.
      - For FIX: the root cause, from `docs/ddw/specs/rca-{ticket}.md`.
    - The PR is created **ready for review, not a draft**: every gate is green by now, and step 4
@@ -151,10 +153,11 @@ If there is an associated tracker ticket (check `.ddw-state.json.tracker`):
 
 1. Propose a transition for the ticket in the tracker per `.ddw/rules/tracker.instructions.md`:
    - FIX → propose transitioning to "Done" or "Resolved".
-   - FEATURE → propose transitioning to "Done" or "In Review".
+   - FEATURE or OPENSPEC-DIRECT → propose transitioning to "Done" or "In Review".
 2. Propose a closing comment with:
    - A reference to the commit/PR.
-   - A reference to the spec/fix-plan.
+   - A reference to the spec/fix-plan, or the selected OpenSpec baseline
+     capabilities for OPENSPEC-DIRECT.
    - A summary of what was implemented.
 3. Ask the user to confirm before taking any action in the tracker.
 4. If there is no direct tracker integration → show the proposed text so the user can paste it

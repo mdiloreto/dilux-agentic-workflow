@@ -88,6 +88,91 @@ def test_the_phases_that_write_code_can_write_code(repo, phase):
     assert vt.source_write_denied(os.path.join(repo, "src/app.py"), repo, phase) is None
 
 
+def test_openspec_direct_needs_opt_in_and_existing_baseline(repo):
+    old = state("CLASSIFY", history=[entry("IDLE", "CLASSIFY")])
+    new = state("CODE", tier="OPENSPEC-DIRECT", ticket="FEAT-1",
+                history=old["history"] + [entry("CLASSIFY", "CODE", tier="OPENSPEC-DIRECT",
+                                                 ticket="FEAT-1")])
+    path = os.path.join(repo, ".ddw-state.json")
+    assert "Spec format: OpenSpec" in refusal(old, new, state_path=path)
+
+    with open(os.path.join(repo, "AGENTS.md"), "w", encoding="utf-8") as fh:
+        fh.write("## Specification framework\nSpec format: OpenSpec\n")
+    assert "openspec/specs" in refusal(old, new, state_path=path)
+
+    os.makedirs(os.path.join(repo, "openspec", "specs", "payments"))
+    spec = os.path.join(repo, "openspec", "specs", "payments", "spec.md")
+    with open(spec, "w", encoding="utf-8") as fh:
+        fh.write("# Payments\n")
+    assert refusal(old, new, state_path=path) is None
+
+    other = os.path.join(repo, "openspec", "specs", "accounts")
+    os.makedirs(other)
+    with open(os.path.join(other, "spec.md"), "wb") as fh:
+        fh.write(b"# Accounts\n\xff")
+    assert "unreadable OpenSpec baseline" in refusal(old, new, state_path=path)
+    os.unlink(os.path.join(other, "spec.md"))
+
+    os.symlink(spec, os.path.join(repo, "openspec", "specs", "payments", "linked.md"))
+    assert "symlink" in refusal(old, new, state_path=path)
+
+
+def test_openspec_direct_still_owes_tests_and_sast(repo):
+    old = state("CODE", tier="OPENSPEC-DIRECT", ticket="FEAT-1",
+                history=[entry("CLASSIFY", "CODE", tier="OPENSPEC-DIRECT", ticket="FEAT-1")])
+    new = state("CLOSEOUT", tier="OPENSPEC-DIRECT", ticket="FEAT-1",
+                history=old["history"] + [entry("CODE", "CLOSEOUT", tier="OPENSPEC-DIRECT",
+                                                ticket="FEAT-1")])
+    assert "tests" in refusal(old, new)
+    new["gates"] = {"tests": True}
+    assert "sast" in refusal(old, new)
+    new["gates"]["sast"] = True
+    assert refusal(old, new) is None
+
+
+def test_direct_closeout_does_not_require_a_daw_spec_decisions_file(repo):
+    old = state("CODE", tier="OPENSPEC-DIRECT", ticket="FEAT-1",
+                history=[entry("CLASSIFY", "CODE", tier="OPENSPEC-DIRECT", ticket="FEAT-1")])
+    new = state("CLOSEOUT", tier="OPENSPEC-DIRECT", ticket="FEAT-1",
+                history=old["history"] + [entry("CODE", "CLOSEOUT", ticket="FEAT-1")])
+    assert vt.decisions_record_missing(repo, old, new) is None
+    old["tier"] = new["tier"] = "QUICK-FIX"
+    assert "decisions-FEAT-1.md" in vt.decisions_record_missing(repo, old, new)
+
+
+def test_openspec_direct_flag_opens_code_without_spec_gates(repo):
+    with open(os.path.join(repo, "AGENTS.md"), "w", encoding="utf-8") as fh:
+        fh.write("## Specification framework\nSpec format: OpenSpec\n")
+    baseline = os.path.join(repo, "openspec", "specs", "payments")
+    os.makedirs(baseline)
+    with open(os.path.join(baseline, "spec.md"), "w", encoding="utf-8") as fh:
+        fh.write("# Payments\n")
+    path = os.path.join(repo, ".ddw-state.json")
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(state("CLASSIFY", history=[entry("IDLE", "CLASSIFY")]), fh)
+
+    cmd = [sys.executable, os.path.join(ROOT, "ddw", "scripts", "transition.py"),
+           "--state", path, "--to", "CODE", "--direct-openspec", "--ticket", "FEAT-1",
+           "--title", "Payments", "--autonomy", "autonomous",
+           "--action", "existing OpenSpec baseline"]
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=repo)
+    assert result.returncode == 0, result.stderr
+    output = json.loads(result.stdout)
+    assert output["phase"] == "CODE"
+    assert output["tier"] == "OPENSPEC-DIRECT"
+    assert output["autonomy"] == "autonomous"
+    assert output["gates"] == {}
+    assert output["history"][-1]["to"] == "CODE"
+
+    conflict = subprocess.run(cmd + ["--tier", "FEATURE"], capture_output=True, text=True,
+                              cwd=repo)
+    assert conflict.returncode != 0
+    no_flag = subprocess.run([arg for arg in cmd if arg != "--direct-openspec"]
+                             + ["--tier", "OPENSPEC-DIRECT"], capture_output=True, text=True,
+                             cwd=repo)
+    assert no_flag.returncode != 0
+
+
 @pytest.mark.parametrize("rel", ["docs/ddw/prd/prd-T-1.md", "AGENTS.md", "CHANGELOG.md",
                                  ".claude/settings.json", ".gitignore"])
 def test_a_repository_at_rest_still_writes_what_it_needs(repo, rel):

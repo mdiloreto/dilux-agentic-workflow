@@ -11,7 +11,7 @@ description: >
 ## Description
 Static Application Security Testing (SAST). Scans the code for security vulnerabilities.
 **BLOCKING GATE** — the `sast` receipt is what lets a ticket leave CODE: to VERIFY in
-FEATURE and FIX, straight to CLOSEOUT in QUICK-FIX. No tier leaves it with open
+FEATURE and FIX, straight to CLOSEOUT in QUICK-FIX and OPENSPEC-DIRECT. No tier leaves it with open
 vulnerabilities.
 
 ## Inputs
