@@ -342,17 +342,11 @@ AGENT_CLIS = {
         "flags": ["--auto", "--format", "json"],
         "model": ["-m", "{model}"],
         "resume": ["-s", "{session}"],
-        # OpenCode picks the PROJECT from `PWD`, not from the process's working
-        # directory. Measured: `subprocess.run(..., cwd=repo)` leaves PWD at the
-        # parent's cwd, and OpenCode then loaded the DEVELOPER'S OWN checkout as
-        # the project — a different `.opencode/`, so the tapped plugin never
-        # loaded, no gate ever ran, and the model's `src/*.py` landed in
-        # /home/pablo/repos/dilux-development-workflow instead of the fixture.
-        # The tap caught it only because it recorded nothing and the scenario
-        # went red. `--dir` is the documented flag and `PWD` is what decides
-        # when it is absent, so both are set: a run pointed at the wrong repo
-        # measures nothing and can damage the tree it was pointed at.
-        "dir": ["--dir", "{repo}"],
+        # OpenCode picks the PROJECT from `PWD`. Measured:
+        # `subprocess.run(..., cwd=repo)` can retain the parent's PWD, so the
+        # model loaded the developer's checkout instead of the fixture. Keep
+        # both cwd (at the call site) and PWD pointed at the fixture. OpenCode 2
+        # removed the former `--dir` flag; passing it now exits before a turn.
         "env": {"PWD": "{repo}"},
         "prompt": ["{turn}"],
     },
@@ -977,6 +971,50 @@ def run_behavioral(sc, ddw_root, repo, agent_cmd, model):
     (repo.parent / "transcript.json").write_text(json.dumps(transcript, indent=2))
     return judge_repo_state(sc, repo, transcript)
 
+
+_INTERACTIVE_QUESTION_TOOLS = {
+    "ask_question",
+    "ask_user",
+    "ask_user_question",
+    "askuserquestion",
+    "question",
+}
+
+
+def transcript_response_text(transcript):
+    """Return user-visible responses and interactive questions, never tool output."""
+    chunks = []
+    for turn in transcript:
+        if isinstance(turn, str):              # Copilot's plain-text response
+            chunks.append(turn)
+            continue
+        if isinstance(turn, dict):             # Claude's JSON result
+            result = turn.get("result")
+            if isinstance(result, str):
+                chunks.append(result)
+            continue
+        if not isinstance(turn, list):         # OpenCode's event stream
+            continue
+        for event in turn:
+            if not isinstance(event, dict):
+                continue
+            part = event.get("part")
+            if not isinstance(part, dict):
+                continue
+            if event.get("type") == "text" and part.get("type") == "text":
+                text = part.get("text")
+                if isinstance(text, str):
+                    chunks.append(text)
+                continue
+            tool = part.get("tool")
+            if (event.get("type") == "tool_use" and isinstance(tool, str)
+                    and tool.lower() in _INTERACTIVE_QUESTION_TOOLS):
+                state = part.get("state") if isinstance(part.get("state"), dict) else {}
+                chunks.append("[interactive-question] " + json.dumps(
+                    state.get("input"), ensure_ascii=False, sort_keys=True))
+    return "\n".join(chunks)
+
+
 def judge_repo_state(sc, repo, transcript):
     """Every assertion here is about the repo or the hooks. Never about prose."""
     exp = sc["expect"]
@@ -1056,7 +1094,7 @@ def judge_repo_state(sc, repo, transcript):
             raise RuntimeError(
                 "transcript_matches declares neither `matches` nor `absent` — "
                 "a clause that asserts nothing passes for the wrong reason")
-        body = json.dumps(transcript, ensure_ascii=False)
+        body = transcript_response_text(transcript)
         for key, pats in clauses:
             for pat in (pats if isinstance(pats, list) else [pats]):
                 try:

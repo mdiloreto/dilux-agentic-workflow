@@ -542,20 +542,23 @@ def _check_autonomy(old_state, new_state, appended):
     touches_classify = any(e.get("from") == CLASSIFY or e.get("to") == CLASSIFY
                            for e in appended if isinstance(e, dict))
     reaching_idle = new_state.get("phase", IDLE) == IDLE
-    # Resuming is the one other moment the mode is chosen, and it has to be, or
-    # the setting is simply lost across a pause: reaching IDLE clears it, and the
-    # only way back would be abandoning the ticket and classifying it again.
+    # Resuming is the one other moment the mode is restored or chosen, and it has
+    # to be, or the setting is simply lost across a pause: reaching IDLE clears
+    # it, and the only way back would be abandoning the ticket and classifying it
+    # again.
     #
     # Narrow because a resume cannot be manufactured. `_resume_allowed` demands a
     # real, unresumed pause of THIS ticket, from the exact phase being re-entered
     # — so getting here means a ticket was genuinely set aside and picked back
     # up, which is a user-visible act with two history entries behind it. The
-    # value chosen is stamped on the resume edge, so the record says a mode was
-    # decided there rather than inherited.
+    # value used is stamped on the resume edge, so the record says whether the
+    # continued run was autonomous even though the IDLE header had cleared it.
     #
-    # What this cannot see is whether the user was actually asked. That stop is
-    # the method's (`ddw/orchestrator.md`, Pause Protocol), like the loop ceiling
-    # — a hook can prove a pause happened; it cannot prove a question was put.
+    # What this cannot see is whether the method restored an exact persisted
+    # `autonomous` value or asked the user to choose another mode. That boundary
+    # is the method's (`ddw/orchestrator.md`, Pause Protocol), like the loop
+    # ceiling — a hook can prove a pause happened, but not why this value was
+    # selected.
     # From IDLE, which is the only place a resume comes from. Matching the word
     # alone was a skeleton key the first time it was written: `_resume_allowed`
     # only runs on the edges out of IDLE, so an ordinary PLAN→CODE labelled

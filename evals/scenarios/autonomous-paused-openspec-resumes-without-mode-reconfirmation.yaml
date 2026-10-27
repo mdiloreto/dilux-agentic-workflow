@@ -1,0 +1,133 @@
+id: autonomous-paused-openspec-resumes-without-mode-reconfirmation
+kind: behavioral
+
+regression:
+  rationale: >
+    The paused ticket records `autonomy: autonomous`, the user names the only
+    paused ticket and asks to finish it, and the repository contains a readable
+    authoritative OpenSpec baseline. Reconfirming the mode decides nothing and
+    turns a persisted preference into a per-session prompt.
+  what_happened: >
+    The pause protocol says autonomy never comes back on its own and explicitly
+    orders the agent to ask again even when the previous value is known. That
+    contradicts autonomous mode's promise to continue until a genuine missing
+    decision, a corrective ceiling, or corrupt state stops it.
+
+given:
+  context_file: |-
+    Python 3.13; pytest. Source lives under `src/`; tests live under `tests/`.
+
+    ## Commands
+
+    - Tests: `pytest -q`
+
+    ## Specification framework
+
+    Spec format: OpenSpec
+  branch: feat/OS-1-calculator-baseline
+  state:
+    phase: IDLE
+    tier: null
+    ticket: null
+    title: null
+    tracker: null
+    autonomy: null
+    gates: {}
+    block: null
+    discovery: null
+    history:
+      - {timestamp: "2026-01-01T00:00:00Z", from: IDLE, to: CLASSIFY, action: "start: implement existing OpenSpec baseline", tier: OPENSPEC-DIRECT, ticket: OS-1, autonomy: autonomous}
+      - {timestamp: "2026-01-01T00:01:00Z", from: CLASSIFY, to: CODE, action: "direct OpenSpec baseline selected", tier: OPENSPEC-DIRECT, ticket: OS-1, autonomy: autonomous}
+      - {timestamp: "2026-01-01T00:02:00Z", from: CODE, to: IDLE, action: "pause: session ended before implementation", tier: OPENSPEC-DIRECT, ticket: OS-1, autonomy: autonomous}
+  files:
+    .ddw-paused/OS-1.ddw-state.json:
+      phase: CODE
+      tier: OPENSPEC-DIRECT
+      ticket: OS-1
+      title: Implement calculator baseline
+      tracker: null
+      autonomy: autonomous
+      gates: {}
+      block: null
+      discovery: null
+      history:
+        - {timestamp: "2026-01-01T00:00:00Z", from: IDLE, to: CLASSIFY, action: "start: implement existing OpenSpec baseline", tier: OPENSPEC-DIRECT, ticket: OS-1, autonomy: autonomous}
+        - {timestamp: "2026-01-01T00:01:00Z", from: CLASSIFY, to: CODE, action: "direct OpenSpec baseline selected", tier: OPENSPEC-DIRECT, ticket: OS-1, autonomy: autonomous}
+    pyproject.toml: |-
+      [tool.pytest.ini_options]
+      pythonpath = ["."]
+    src/__init__.py: ""
+    tests/test_calculator.py: |-
+      from src.calculator import add
+
+
+      def test_adds_two_integers():
+          assert add(2, 3) == 5
+    openspec/specs/calculator/spec.md: |-
+      # Calculator Capability
+
+      ## Purpose
+
+      Define the bounded calculator slice used by this fixture.
+
+      ## Requirements
+
+      ### Requirement: Integer Addition
+
+      The product SHALL expose `src.calculator.add(left, right)` and return the
+      arithmetic sum of two integers without persisting state.
+
+      #### Scenario: User adds two integers
+
+      - GIVEN two integer operands
+      - WHEN `add` is called
+      - THEN it returns their arithmetic sum
+
+when:
+  turns:
+    - >-
+      Retomá OS-1 desde donde quedó pausado y seguí hasta terminar la baseline
+      vigente de OpenSpec.
+  timeout: 1200
+
+expect:
+  state_phase: IDLE
+  files_present:
+    - src/calculator.py
+  file_matches:
+    - path: src/calculator.py
+      matches:
+        - "def add\\("
+        - "return left \\+ right"
+  transcript_matches:
+    - absent: "(?i)(\\[interactive-question\\]|🙋\\s+(YOUR TURN|TU TURNO))"
+
+control:
+  type: substitute
+  edits:
+    - path: ddw/orchestrator.md
+      installed_path: .ddw/orchestrator.md
+      old: 'If the saved mode is exactly `"autonomous"`, restore it without asking.'
+      new: 'Even if the saved mode is exactly `"autonomous"`, ask which mode to use.'
+    - path: ddw/orchestrator.md
+      installed_path: .ddw/orchestrator.md
+      old: |-
+        5. Continue according to the resolved mode. Under `autonomous`, do not show the normal
+           "work in progress" picker: the user's resume request already answered it, so chain until one of
+           the three stops in *Autonomy*. Under `assisted` and `minimal`, follow their normal approval rules.
+      new: |-
+        5. Run the normal "work in progress" flow (propose, do not auto-resume), regardless of the
+           restored mode.
+    - path: ddw/rules/state.instructions.md
+      installed_path: .ddw/rules/state.instructions.md
+      old: |-
+        A pause clears `autonomy` from the live IDLE header so the next ticket cannot inherit it; it does
+        not erase the mode persisted for the same paused ticket. When the user explicitly resumes that
+        ticket, an exact `autonomous` value in both its saved snapshot and its latest unresolved pause entry
+        is restored without reconfirmation. That is continuation of an authorization already recorded, not
+        inference. `assisted`, `minimal`, and an absent value remain a choice at resume, and disagreement
+        between the two records is corrupt state — never a reason to select the more permissive one.
+      new: |-
+        A pause clears `autonomy` from the live IDLE header. Resuming is always a new choice point: every
+        saved mode, including `autonomous`, must be put to the user again before it is restored. Never
+        continue a paused ticket on its persisted mode alone.

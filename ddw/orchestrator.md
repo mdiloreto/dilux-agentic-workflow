@@ -149,24 +149,26 @@ When the user wants to pause the current ticket:
 When the user wants to resume a paused ticket:
 1. List the paused tickets in `.ddw-paused/`.
 2. The user picks which one to resume.
-3. **Ask about the mode, before restoring anything.** `autonomy` does NOT come back on its own: it
-   is the setting that decides whether a person is asked before each step, and days have passed.
-   Read what the ticket was walked under — the last history entry of that ticket carrying
-   `"autonomy": "minimal"`, and `assisted` if there is none — and put it to the user:
-
-   > This ticket was running in `minimal` (no confirmation between steps). Two days have passed.
-   > Keep it, or go back to confirming each step?
-
-   Their answer is what you pass as `--autonomy` on the resume. Resuming is the only edge outside
-   CLASSIFY where that field may be set, and it may only be set by asking — the hook can see that a
-   real pause is being resumed, it cannot see whether you asked. Do not skip the question because
-   the previous value was `minimal`; that is exactly the answer that needs re-confirming.
-4. Restore the saved metadata — `tier`, `ticket`, `title`, `tracker`, `block`, `gates` — into the
-   CURRENT `.ddw-state.json`, and append a `IDLE → <phase>` entry with
+3. Resolve the mode before restoring anything. Read `autonomy` from the selected paused snapshot
+   (absent or `null` means `"assisted"`) and cross-check it against that ticket's latest unresolved
+   `pause:` entry in the CURRENT history. The two records must agree; a mismatch is corrupt state,
+   so stop and report it rather than choosing whichever value grants more permission.
+   - **If the saved mode is exactly `"autonomous"`, restore it without asking.** The mode was
+     explicitly chosen for this ticket and persisted in both records; selecting that ticket and
+     asking to resume it is the continuation request, not a new ticket inheriting a preference.
+     Pass `--autonomy autonomous` on the resume.
+   - **For `"assisted"`, `"minimal"`, or an absent mode, ask which mode to use.** Show the saved
+     mode and offer `assisted`, `minimal`, and `autonomous`; pass the answer as `--autonomy` on the
+     resume. **Do not infer `"autonomous"`** from elapsed time, task size, or the desire to avoid a
+     question. It must either be the exact persisted mode or a new explicit answer from the user.
+4. Restore the saved metadata — `tier`, `ticket`, `title`, `tracker`, `block`, `gates` — and the
+   resolved `autonomy` into the CURRENT `.ddw-state.json`, and append a `IDLE → <phase>` entry with
    `action: "resume: <ticket>"`. **Never overwrite the file with the saved copy:** its `history` is
    shorter than the one on disk, and history is append-only — restoring it wholesale reads as a
    truncation and gets refused.
-5. Run the normal "work in progress" flow (propose, do not auto-resume).
+5. Continue according to the resolved mode. Under `autonomous`, do not show the normal
+   "work in progress" picker: the user's resume request already answered it, so chain until one of
+   the three stops in *Autonomy*. Under `assisted` and `minimal`, follow their normal approval rules.
 
 ## Self-Check before write actions
 

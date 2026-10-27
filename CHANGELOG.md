@@ -19,6 +19,15 @@ move at different speeds. So the promise is specific:
 
 ---
 
+## [0.60.2] - 2026-10-27
+
+### Fixed
+
+- Resuming an explicitly selected paused ticket now restores its persisted
+  `autonomous` mode without asking for the same decision again. The saved
+  snapshot and unresolved pause entry must agree; `assisted`, `minimal`, and an
+  absent mode remain an explicit choice at resume.
+
 ## [0.60.1] - 2026-10-26
 
 ### Fixed
