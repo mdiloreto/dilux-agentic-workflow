@@ -362,6 +362,54 @@ def test_a_report_that_states_no_floor_is_refused_not_given_one(tmp_path):
         "a report with no floor passed against one DDW invented for it: " + "\n".join(refused)
 
 
+def _go_report(tmp_path, floor="N/A — AGENTS.md §Testing", statement="70.8%",
+               output="coverage: 70.8% of statements"):
+    (tmp_path / "AGENTS.md").write_text(
+        "## Testing\nCoverage floor — line: N/A — no project coverage floor declared.\n")
+    report = _worked("ddw-test", TESTS_DOC)
+    changes = {
+        "Runner": "Go 1.26 (go test)",
+        "Command": "go test ./internal/... -cover -count=1",
+        "Line coverage": "N/A — go test -cover reports statements, not lines",
+        "Branch coverage": "N/A — go test -cover does not instrument branches",
+        "Function coverage": "N/A — not measured by this run",
+        "Coverage floor": floor,
+    }
+    for key, value in changes.items():
+        report = re.sub(rf"^\| {key} \|.*$", f"| {key} | {value} |", report, flags=re.M)
+    report += (f"\n| Statement coverage | {statement} |\n"
+               "| Coverage scope | internal/ledger |\n"
+               f"| Go coverage output | {output} |\n")
+    return report
+
+
+def test_go_statement_coverage_without_project_floor_is_reported_not_invented(tmp_path):
+    r, refused = _validate(tmp_path, "validate_tests.py", "tests-go.md", _go_report(tmp_path))
+    assert r.returncode == 0 and not refused, r.stdout
+    assert "statement 71%" in r.stdout and "no project floor" in r.stdout
+
+
+def test_go_exception_refuses_missing_evidence_or_a_real_floor(tmp_path):
+    base = _go_report(tmp_path)
+    variants = (
+        (base.replace("coverage: 70.8% of statements", "coverage: 91.0% of statements"), "F-TEST-04"),
+        (base.replace("| Statement coverage | 70.8% |", ""), "F-TEST-04"),
+        (base.replace("| Branch coverage | N/A — go test -cover does not instrument branches |",
+                      "| Branch coverage | 100% |"), "F-TEST-04"),
+        (base.replace("| Line coverage | N/A — go test -cover reports statements, not lines |",
+                      "| Line coverage | N/A |"), "F-TEST-04"),
+        (base.replace("| Coverage floor | N/A — AGENTS.md §Testing |",
+                      "| Coverage floor | 80% (AGENTS.md) |"), "F-TEST-04"),
+    )
+    for idx, (body, rule) in enumerate(variants):
+        _, refused = _validate(tmp_path, "validate_tests.py", f"go-invalid-{idx}.md", body)
+        assert _refuses(refused, rule), "\n".join(refused)
+
+    (tmp_path / "AGENTS.md").write_text("## Testing\nCoverage floor — line: 80%.\n")
+    _, refused = _validate(tmp_path, "validate_tests.py", "go-not-exempt.md", base)
+    assert _refuses(refused, "F-TEST-05"), "\n".join(refused)
+
+
 def test_a_skipped_test_owes_a_reason(tmp_path):
     """F-TEST-06. Skipping is the cheapest way to put a suite in green, and a
     skip without a reason is indistinguishable from one covering a failure."""

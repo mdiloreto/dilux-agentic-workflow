@@ -30,7 +30,7 @@ set -uo pipefail
 # a knob anyone could turn from outside the file. `docs/AI-POLICY.md` and
 # `CONTRIBUTING.md` both name this variable as the thing not to soften; it was
 # softenable without editing the file they were talking about.
-EXPECT_CHECKS=673
+EXPECT_CHECKS=675
 EXPECT_SKILLS=20
 EXPECT_AGENTS=5
 EXPECT_RULES=14
@@ -40,7 +40,7 @@ EXPECT_ADAPTERS=6
 # `--check-anchors`, `--cover` and every check in this file green, and the
 # published percentage went on being a percentage of a smaller list. The same
 # reason `EXPECT_CHECKS` exists, one file over.
-EXPECT_MUTATIONS=795
+EXPECT_MUTATIONS=796
 
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # EXPORTED, because the Python blocks below anchor their own temporary
@@ -3914,6 +3914,36 @@ VTFOUT="$(python3 "$SELF/ddw/scripts/validate_tests.py" "$VP/docs/ddw/reports/te
 case "$VTFOUT" in
   *"❌ F-TEST-04"*"under the floor"*61*) ok "and coverage under the quoted floor is named with its number" ;;
   *) bad "61% line coverage passed a report quoting an 80% floor" ;;
+esac
+
+# Go's native counter measures statements. A project with no declared floor
+# owes the number and the runner line, never fabricated branch percentages.
+GOV="$WORK/go-coverage"; mkdir -p "$GOV/docs/ddw/reports"
+printf '## Testing\nCoverage floor — line: N/A — no project floor declared.\n' > "$GOV/AGENTS.md"
+cat > "$GOV/docs/ddw/reports/tests-GO-1.md" <<'GOCOVER'
+| Runner | Go 1.26 (go test) |
+| Command | go test ./internal/... -cover -count=1 |
+| Total | 42 |
+| Passed | 42 |
+| Failed | 0 |
+| Skipped | 0 |
+| Line coverage | N/A — Go reports statements |
+| Branch coverage | N/A — no branch instrumentation |
+| Function coverage | N/A — not measured |
+| Statement coverage | 70.8% |
+| Coverage scope | internal/ledger |
+| Go coverage output | coverage: 70.8% of statements |
+| Coverage floor | N/A — AGENTS.md §Testing |
+GOCOVER
+python3 "$SELF/ddw/scripts/validate_tests.py" "$GOV/docs/ddw/reports/tests-GO-1.md" >/dev/null 2>&1 \
+  && ok "Go statement coverage is reported without inventing a floor for a project declaring none" \
+  || bad "Go's measured statement coverage was refused as missing line, branch and function metrics"
+sed 's/coverage: 70.8% of statements/coverage: 91.0% of statements/' \
+  "$GOV/docs/ddw/reports/tests-GO-1.md" > "$GOV/docs/ddw/reports/tests-GO-2.md"
+GOVOUT="$(python3 "$SELF/ddw/scripts/validate_tests.py" "$GOV/docs/ddw/reports/tests-GO-2.md" 2>/dev/null || true)"
+case "$GOVOUT" in
+  *"❌ F-TEST-04"*"matching"*) ok "a Go report with fabricated coverage cannot earn the tests gate" ;;
+  *) bad "Go's reported statement coverage disagrees with its copied runner output but passed" ;;
 esac
 
 # The floor's SOURCE is read back, not pattern-matched. Measured live

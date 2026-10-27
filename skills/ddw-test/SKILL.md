@@ -88,7 +88,8 @@ declares a floor, quote that — the number has to actually be there, because an
 file that never states it is a floor the report chose for itself (measured live: `docs/ddw`
 prefixed onto a method path, built to satisfy the old pattern-match). If the project declares
 none, write it as the example below does — `80% (method default — .ddw/rules/testing.instructions.md)` —
-which is the one floor the method itself supplies:
+which is the one floor the method itself supplies for instrumented metrics. Native Go
+`go test -cover` is the narrow exception below: it does not measure those three metrics.
 
 ```markdown
 # Test run {ticket}
@@ -112,6 +113,29 @@ which is the one floor the method itself supplies:
 
 ## Skips
 (none)
+```
+
+When `AGENTS.md` §Testing explicitly declares **no project coverage floor** and
+the exact run uses native `go test -cover`, report statement coverage rather
+than calling it line coverage. Copy the actual `coverage: N% of statements`
+line from the output for the named package; never derive line/branch/function
+percentages from it. This exception is unavailable when the project declares a
+floor or the run uses another tool. A Go example (replace the observed figures):
+
+```markdown
+| Runner | Go 1.26 (go test) |
+| Command | `go test ./internal/... -cover -count=1` |
+| Total | 42 |
+| Passed | 42 |
+| Failed | 0 |
+| Skipped | 0 |
+| Line coverage | N/A — go test -cover reports statements, not lines |
+| Branch coverage | N/A — go test -cover does not instrument branches |
+| Function coverage | N/A — not measured by this run |
+| Statement coverage | 70.8% |
+| Coverage scope | internal/ledger |
+| Go coverage output | coverage: 70.8% of statements |
+| Coverage floor | N/A — AGENTS.md §Testing |
 ```
 
 When the run is red, every failure goes under that `## Failures` heading, one per line, **by test
