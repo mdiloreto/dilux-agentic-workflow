@@ -19,6 +19,15 @@ move at different speeds. So the promise is specific:
 
 ---
 
+## [0.60.1] - 2026-10-26
+
+### Fixed
+
+- Native Go reports can record measured statement coverage and explicitly
+  unavailable line, branch and function metrics without inventing a coverage
+  floor that the project does not declare. A matching Go output line and package
+  scope are required; a declared floor still blocks an incomplete report.
+
 ## [0.60.0] - 2026-10-26
 
 ### Added — direct implementation from an existing OpenSpec baseline
