@@ -1,6 +1,6 @@
 ---
 applyTo: '**'
-version: 1.2.0
+version: 1.2.1
 ---
 
 # Testing Conventions
@@ -109,6 +109,12 @@ describe('<module>/<function>')
 
 - Business logic should aim for 90%+.
 - NEVER lower coverage with a new change.
+
+For native `go test -cover`, Go reports statement coverage, not line, branch or
+function coverage. When `AGENTS.md` §Testing explicitly declares no project floor,
+report the measured statements and each unavailable metric as N/A with its reason;
+the 80% method default is not silently attributed to that project. This exception
+does not apply to a project with a declared floor or to another coverage tool.
 
 ## Mocking
 

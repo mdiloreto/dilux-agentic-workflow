@@ -1,6 +1,6 @@
 ---
 applyTo: '**'
-version: 1.17.1
+version: 1.17.2
 ---
 
 # Validation Rules — Central Catalog
@@ -348,8 +348,8 @@ a document; whether it is a true document remains the reader's judgement, and ev
 | F-TEST-01 | Run not reproducible | The report must name the **runner** and the **exact command**. Missing either → FAIL. | A result nobody can re-run is an anecdote. This is also the only verification available to a human in ten seconds, which is the whole point of writing it down. |
 | F-TEST-02 | Counts absent or impossible | Total, passed and failed must be present, and `passed + failed + skipped` must equal `total`. Missing or contradictory → FAIL. | Arithmetic is the one thing a report cannot get wrong quietly. A count that does not add up is a report about two different runs. |
 | F-TEST-03 | Failure with no name | Every reported failure must be identified by its test ID. A count with no names → FAIL. | The corrective loop needs something to work from. "3 failed" tells nobody which three. |
-| F-TEST-04 | Coverage incomplete or under the floor | Line, branch and function coverage must each be stated as a number, and each must be at or above the floor. Missing one, or under → FAIL. | One coverage number hides the other two: a suite can touch every line and no branch. Under the floor is the condition the loop exists for. |
-| F-TEST-05 | Floor not stated or not sourced | The report must state the coverage floor and where it comes from (`AGENTS.md`, the spec). Absent → FAIL; stated without a source → WARNING. | A report that chooses its own floor passes itself. The floor belongs to the project. |
+| F-TEST-04 | Coverage incomplete or under the floor | Line, branch and function coverage must each be stated as a number and meet the floor. Exception: when the exact command is native `go test -cover` and `AGENTS.md` §Testing explicitly declares no coverage floor, require measured statement coverage with matching Go runner output, a named package scope and explicit N/A reasons for each unmeasured metric. Do not call statement coverage line coverage; no invented 80% threshold on this exception. Missing evidence or a declared project floor → FAIL. | One coverage number hides the other two; Go's native counter measures statements, not the other three metrics. An unavailable metric is not 100%, and an undeclared project policy is not 80%. |
+| F-TEST-05 | Floor not stated or not sourced | The report must state the coverage floor and where it comes from (`AGENTS.md`, the spec). Absent → FAIL; stated without a source → WARNING. Native Go exception: explicit `N/A — AGENTS.md` is valid only when §Testing actually declares no coverage floor. | A report that chooses its own floor passes itself. The floor belongs to the project. |
 | F-TEST-07 | More than one run in one report | A count or coverage field appearing twice (a per-suite breakdown). Every rule reads the first value it finds, so a second suite is not checked at all → FAIL. | A green unit suite above a red integration suite was read as the unit suite alone, with five failures on the page nobody counted. |
 | F-TEST-08 | A red run earning the gate | `Failed` greater than zero → FAIL. `ddw-test`'s own criterion is 0 failing tests, and the validator that writes the gate's receipt was not checking it. | A report of a red run does not earn the tests gate, however complete the report is. |
 | F-TEST-06 | Silent skip | Every skipped test must carry a reason. Skips with no explanation → FAIL. | A silent skip is the cheapest way to make a suite green, and it looks identical to a test that exists. |
