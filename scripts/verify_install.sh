@@ -30,7 +30,7 @@ set -uo pipefail
 # a knob anyone could turn from outside the file. `docs/AI-POLICY.md` and
 # `CONTRIBUTING.md` both name this variable as the thing not to soften; it was
 # softenable without editing the file they were talking about.
-EXPECT_CHECKS=672
+EXPECT_CHECKS=675
 EXPECT_SKILLS=20
 EXPECT_AGENTS=5
 EXPECT_RULES=14
@@ -40,7 +40,7 @@ EXPECT_ADAPTERS=6
 # `--check-anchors`, `--cover` and every check in this file green, and the
 # published percentage went on being a percentage of a smaller list. The same
 # reason `EXPECT_CHECKS` exists, one file over.
-EXPECT_MUTATIONS=793
+EXPECT_MUTATIONS=796
 
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # EXPORTED, because the Python blocks below anchor their own temporary
@@ -1186,6 +1186,37 @@ python3 "$SELF/ddw/scripts/validate_prd.py" "$VP/docs/ddw/prd/prd-FEAT-001.md" -
   && compgen -G "$VP/.ddw-sessions/prd-validated-*" >/dev/null \
   && ok "validate_prd.py passes a sound PRD and leaves the content-hashed receipt" \
   || bad "the validator rejects a sound PRD or writes no receipt — validation is back to being prose"
+SPAC="$WORK/split-ac/docs/ddw/prd"; mkdir -p "$SPAC"
+cat > "$SPAC/prd-FEAT-001.md" <<'SPLITINDEX'
+| Ticket | FEAT-001 |
+| Status | Split |
+| Acceptance criteria to cover | 3 |
+| Sub-ticket | Title | PRD | ACs | Dependencies | Status |
+| FEAT-001a | Compra | prd-FEAT-001a.md | AC-01, AC-03 | none | active |
+| FEAT-001b | Pago | prd-FEAT-001b.md | AC-02 | FEAT-001a | pending |
+SPLITINDEX
+sed 's/AC-02 (FR-01)/AC-03 (FR-01)/' "$VP/docs/ddw/prd/prd-FEAT-001.md" > "$SPAC/prd-FEAT-001a.md"
+SPOUT="$(python3 "$SELF/ddw/scripts/validate_prd.py" "$SPAC/prd-FEAT-001a.md" --tier FEATURE 2>/dev/null || true)"
+case "$SPOUT" in
+  *"✅ F-PRD-05"*"ACs match split index"*"Result: PASSED"*)
+    ok "a split child keeps noncontiguous global AC ids assigned by its index" ;;
+  *) bad "a split child was refused despite carrying its assigned global AC ids: $SPOUT" ;;
+esac
+sed 's/AC-03 (FR-01)/AC-02 (FR-01)/' "$SPAC/prd-FEAT-001a.md" > "$SPAC/wrong.md"
+mv "$SPAC/wrong.md" "$SPAC/prd-FEAT-001a.md"
+SPOUT="$(python3 "$SELF/ddw/scripts/validate_prd.py" "$SPAC/prd-FEAT-001a.md" --tier FEATURE 2>/dev/null || true)"
+case "$SPOUT" in
+  *"❌ F-PRD-05"*"split index AC mismatch"*) ok "a child cannot take a sibling's globally assigned AC" ;;
+  *) bad "a split child claimed an AC its index gave to another ticket" ;;
+esac
+cat >> "$SPAC/prd-FEAT-001.md" <<'DUPLICATEROW'
+| FEAT-001b | Otra fila | prd-FEAT-001b.md | | FEAT-001a | pending |
+DUPLICATEROW
+SPOUT="$(python3 "$SELF/ddw/scripts/validate_prd.py" "$SPAC/prd-FEAT-001.md" --tier FEATURE 2>/dev/null || true)"
+case "$SPOUT" in
+  *"❌ F-PRD-10"*"multiple rows"*) ok "a duplicate split row cannot silently redefine a child's assignment" ;;
+  *) bad "a split index with two rows for one child passed: $SPOUT" ;;
+esac
 sed 's/debe exponer/deberia exponer/' "$VP/docs/ddw/prd/prd-FEAT-001.md" > "$VP/broken.md"
 VPOUT="$(python3 "$SELF/ddw/scripts/validate_prd.py" "$VP/broken.md" --tier FEATURE 2>/dev/null || true)"
 case "$VPOUT" in
