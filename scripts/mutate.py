@@ -1970,10 +1970,10 @@ MUTATIONS = [
           '    resuming = any(_is_resume(e) and e.get("from") == IDLE\n'
           "                   for e in appended if isinstance(e, dict))",
           "    resuming = any(_is_resume(e) for e in appended if isinstance(e, dict))")),
-    ("the pause protocol stops asking which mode to come back in",
+    ("a paused autonomous ticket goes back to asking for its already-persisted mode",
      edit("ddw/orchestrator.md",
-          "3. **Ask about the mode, before restoring anything.**",
-          "3. **Restore the mode silently.**")),
+          'If the saved mode is exactly `"autonomous"`, restore it without asking.',
+          'Even if the saved mode is exactly `"autonomous"`, ask which mode to use.')),
 
     # ── Pause, work on something else, come back ─────────────────────────────
     ("a pause only resumes if it was the very last thing that happened",

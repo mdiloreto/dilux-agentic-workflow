@@ -539,21 +539,30 @@ and QUICK-FIX's `CLOSEOUT→CODE` gives up `tests`, `sast`, `commit` and `pr`. S
 review and pausing to wait for one end in the same place, which is the only way it makes sense: the
 question a gate answers is about the work as it stands, not as it stood.
 
-**A resumed ticket asks which mode to come back in.** Reaching IDLE clears `autonomy`, so without a
-second moment to choose it the setting is simply lost across a pause — and the only way back would
-be abandoning the ticket and classifying it again, which throws away the work to recover a
-preference. So resuming is the one other place that field may be set, and the pause protocol makes
-the assistant put it to the user: *this ticket was running in `minimal`, two days have passed, keep
-it?*
+**A paused autonomous ticket keeps its mode when the user resumes it.** Reaching IDLE still clears
+the live `autonomy` header, because a new ticket must never inherit another ticket's permission. A
+pause is different: the selected snapshot and the unresolved pause entry both name the same ticket
+and preserve its mode. When both say `autonomous`, asking for the mode again turns a recorded
+authorization into a per-session preference and contradicts the promise that only a missing
+decision, a corrective ceiling, or corrupt state stops that run.
+
+The exception is deliberately asymmetric. `assisted`, `minimal`, and an absent value still make
+resume a choice point: the assistant shows the previous mode and asks which of the three modes to
+use. `autonomous` is restored silently only when it is the exact persisted value and the user has
+explicitly selected the paused ticket to resume. It is never inferred from task size, elapsed time,
+or a request to be less verbose. If snapshot and unresolved pause entry disagree, the state is
+corrupt and the run stops rather than choosing the more permissive record.
 
 Narrow, because a resume cannot be manufactured. It needs a real, unresumed pause **of this ticket**,
 **from the exact phase** being re-entered, and it has to come from IDLE — the first version of this
 matched the word `resume:` anywhere, which meant an ordinary `PLAN→CODE` labelled that way granted
-the mode for free, since the resume rules only run on the edges out of IDLE. The value chosen is
-stamped on the resume edge, so the history says a mode was decided there rather than inherited.
+the mode for free, since the resume rules only run on the edges out of IDLE. The resolved value is
+stamped on the resume edge, so the history still records whether the continued run had a person in
+the loop.
 
-What the hook cannot see is whether the question was actually asked. That stop is the method's, like
-the loop ceiling: a hook can prove a pause happened; it cannot prove a person was consulted. Said
+What the hook cannot see is whether the method restored the corroborated `autonomous` value or a
+person chose another mode. That boundary stays in the pause protocol: the hook proves the pause and
+its destination, while the two persisted records prove whether silent restoration is allowed. Said
 plainly rather than implied, because a guarantee whose scope is unstated gets read as covering
 everything.
 

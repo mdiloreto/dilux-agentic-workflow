@@ -364,6 +364,52 @@ def test_json_import_is_used_by_seed_files(repo):
 # to a way of coming out green without having measured anything.
 
 
+def test_opencode_turn_uses_cwd_and_pwd_without_removed_dir_flag(tmp_path):
+    """OpenCode 2 selects the project from cwd/PWD and no longer accepts --dir."""
+    repo = tmp_path / "repo"
+    name, cmd, env = runner.agent_turn_cmd(
+        ["opencode"], "openai/gpt-5.6-sol-1m", None, "seguí", repo=repo
+    )
+
+    assert name == "opencode"
+    assert cmd[:2] == ["opencode", "run"]
+    assert "--auto" in cmd
+    assert "--dir" not in cmd
+    assert env["PWD"] == str(repo)
+
+
+def test_transcript_assertions_ignore_tool_output_but_keep_real_questions():
+    transcript = [[
+        {
+            "type": "tool_use",
+            "part": {
+                "type": "tool",
+                "tool": "read",
+                "state": {"output": "Do you want to resume this ticket?"},
+            },
+        },
+        {
+            "type": "text",
+            "part": {"type": "text", "text": "Implementation complete."},
+        },
+        {
+            "type": "tool_use",
+            "part": {
+                "type": "tool",
+                "tool": "question",
+                "state": {"input": {"questions": [{"question": "¿Retomo OS-1?"}]}},
+            },
+        },
+    ]]
+
+    body = runner.transcript_response_text(transcript)
+
+    assert "Do you want to resume this ticket?" not in body
+    assert "Implementation complete." in body
+    assert "[interactive-question]" in body
+    assert "¿Retomo OS-1?" in body
+
+
 def test_copilot_has_a_headless_profile():
     """Without an entry, `agent_profile` raises and the scenario does not run.
     With a wrong one, it runs and measures something else: which is why the

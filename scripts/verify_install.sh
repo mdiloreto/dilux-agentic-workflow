@@ -3166,18 +3166,18 @@ assert not blocked(st("CLASSIFY", None), st("CLASSIFY", "minimal")), \
 assert not blocked(st("DEFINE", "minimal"), st("PLAN", "minimal", NXT, {"define": True})), \
     "an ordinary transition under minimal is refused"
 
-# Resuming is the one other moment the mode is chosen. Without it the setting is
-# simply lost across a pause — reaching IDLE clears it, and the only way back
-# would be abandoning the ticket. It is narrow because a resume cannot be
-# manufactured: it needs a real, unresumed pause of this ticket, from the exact
-# phase being re-entered.
+# Resuming is the one other moment the mode is restored or chosen. Without it the
+# setting is simply lost across a pause — reaching IDLE clears it, and the only
+# way back would be abandoning the ticket. It is narrow because a resume cannot
+# be manufactured: it needs a real, unresumed pause of this ticket, from the
+# exact phase being re-entered.
 PAUSED = H + [{"timestamp": "2026-01-01T00:03:00Z", "from": "DEFINE", "to": "IDLE",
                "action": "pause: waiting on product", "ticket": "T-1", "tier": "FEATURE",
                "autonomy": "minimal"}]
 BACK = PAUSED + [{"timestamp": "2026-01-01T02:00:00Z", "from": "IDLE", "to": "DEFINE",
                   "action": "resume: back to it", "ticket": "T-1", "tier": "FEATURE"}]
 idle_after = st(IDLE_PHASE := "IDLE", None, PAUSED, tier=None, ticket=None)
-for answer in ("minimal", "assisted"):
+for answer in ("minimal", "assisted", "autonomous"):
     assert not blocked(idle_after, st("DEFINE", answer, BACK)), \
         f"resuming and answering {answer!r} about the mode is refused"
 # …and it is still an enum, and still not a door anywhere else.
@@ -3191,16 +3191,19 @@ assert blocked(st("PLAN", "assisted", NXT, {"define": True}),
                   {"define": True, "spec": True, "threat": True})), \
     "the word resume on an ordinary forward edge sets the mode — it is a skeleton key again"
 
-# The hook can prove a pause is being resumed. It cannot prove a question was
-# put — so that stop lives in the method, and a stop that lives in prose has to
-# be checked as prose or it quietly stops existing.
+# The hook can prove a pause is being resumed. It cannot prove whether the
+# persisted mode was restored or a person chose another one, so that distinction
+# lives in the method and has to be checked as prose or it quietly disappears.
 protocol = open(os.path.join(src, "ddw/orchestrator.md"), encoding="utf-8").read()
 start = protocol.find("When the user wants to resume a paused ticket")
 assert start > 0, "the pause protocol no longer says how to resume"
-resume_protocol = protocol[start:start + 2000].lower()
-for phrase in ("ask about the mode", "autonomy"):
+resume_protocol = " ".join(protocol[start:start + 3000].lower().split())
+for phrase in (
+        'if the saved mode is exactly `"autonomous"`, restore it without asking',
+        'for `"assisted"`, `"minimal"`, or an absent mode, ask which mode to use',
+        'do not infer `"autonomous"`'):
     assert phrase in resume_protocol, \
-        f"the resume protocol never says to {phrase!r}: the mode comes back with nobody deciding"
+        f"the resume protocol lost its mode boundary: {phrase!r}"
 PYAUTO
 
 # And the sanctioned helper has to be able to write what the method promises:
