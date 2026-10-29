@@ -87,6 +87,24 @@ const loadPackagedSkills = (ddw) => {
   })
 }
 
+const packageRootFor = (modulePath) => {
+  const root = resolve(dirname(modulePath), "..", "..", "..")
+  try {
+    if (realpathSync(resolve(root, "adapters/opencode/plugin/ddw.js")) !== modulePath) return null
+    const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"))
+    return [manifest.main, manifest.exports].some((entrypoint) => {
+      if (typeof entrypoint !== "string") return false
+      try {
+        return realpathSync(resolve(root, entrypoint)) === modulePath
+      } catch {
+        return false
+      }
+    }) ? root : null
+  } catch {
+    return null
+  }
+}
+
 const methodFor = (directory) => {
   // Repo first, plugin second — the same resolution the Claude plugin's hooks
   // use. A repo that carries its own .ddw/ (drop-in, or vendored to diverge)
@@ -95,10 +113,12 @@ const methodFor = (directory) => {
   // repo. The state never moves — it is the project's, wherever the method
   // came from. realpathSync: resolved through a symlink the module URL names
   // the link, and the method must be found next to the real file.
-  const here = dirname(realpathSync(fileURLToPath(import.meta.url)))
+  const modulePath = realpathSync(fileURLToPath(import.meta.url))
+  const here = dirname(modulePath)
+  const packageRoot = packageRootFor(modulePath)
   const candidates = [
     { kind: "dropin", path: join(directory, ".ddw") },
-    { kind: "package", path: join(here, "..", "..", "..", "ddw") },
+    ...(packageRoot ? [{ kind: "package", path: join(packageRoot, "ddw") }] : []),
     { kind: "global", path: join(here, "..", "ddw") },
   ]
   return candidates.find((candidate) => existsSync(join(candidate.path, "scripts", "hook-gate.py"))) ?? candidates[0]

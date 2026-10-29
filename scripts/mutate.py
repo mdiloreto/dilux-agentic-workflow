@@ -3756,6 +3756,10 @@ MUTATIONS = [
      edit("adapters/opencode/plugin/ddw.js",
           "          if (!editor.get(skill.id)) editor.add(skill)",
           "          editor.add(skill)")),
+    ("a global plugin's parent ddw directory is mistaken for a package root",
+     edit("adapters/opencode/plugin/ddw.js",
+          '  const root = resolve(dirname(modulePath), "..", "..", "..")\n',
+          '  const root = resolve(dirname(modulePath), "..", "..", "..")\n  return root\n')),
 ]
 
 

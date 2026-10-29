@@ -40,7 +40,7 @@ EXPECT_ADAPTERS=6
 # `--check-anchors`, `--cover` and every check in this file green, and the
 # published percentage went on being a percentage of a smaller list. The same
 # reason `EXPECT_CHECKS` exists, one file over.
-EXPECT_MUTATIONS=807
+EXPECT_MUTATIONS=808
 
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # EXPORTED, because the Python blocks below anchor their own temporary
@@ -12997,14 +12997,28 @@ PROBE
   cp -r "$SELF/ddw" "$WORK/dropinrepo/.ddw"
   mkdir -p "$WORK/package/adapters/opencode/plugin"
   cp "$SELF/adapters/opencode/plugin/ddw.js" "$WORK/package/adapters/opencode/plugin/ddw.js"
+  cp "$SELF/package.json" "$WORK/package/package.json"
   cp -r "$SELF/ddw" "$WORK/package/ddw"
   cp -r "$SELF/skills" "$WORK/package/skills"
   mkdir -p "$WORK/fakecfg/skills/native-literal"
+  cp -r "$SELF/ddw" "$WORK/ddw"
+  mkdir -p "$WORK/skills/native-literal"
   cat > "$WORK/fakecfg/skills/native-literal/SKILL.md" <<'SKILL'
 ---
 name: "native-literal"
 description: |
   An unrelated native skill using a literal YAML scalar.
+metadata:
+  owner: user
+---
+
+# Native literal skill
+SKILL
+  cat > "$WORK/skills/native-literal/SKILL.md" <<'SKILL'
+---
+name: "native-literal"
+description: |
+  An unrelated user skill beside the global config root.
 metadata:
   owner: user
 ---

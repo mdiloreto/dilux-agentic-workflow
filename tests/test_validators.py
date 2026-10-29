@@ -1300,6 +1300,46 @@ assert.equal(typeof hooks["execute.before"], "function", "global plugin setup di
     assert r.returncode == 0, r.stderr
 
 
+@pytest.mark.parametrize("mixed", [False, True], ids=["missing-parent-skills", "mixed-parent-skills"])
+def test_opencode_v2_global_parent_method_is_not_a_package(tmp_path, mixed):
+    home = tmp_path / "home"
+    global_root = home / ".config/opencode"
+    plugin_dir = global_root / "plugins"
+    plugin_dir.mkdir(parents=True)
+    shutil.copy(os.path.join(ROOT, "adapters/opencode/plugin/ddw.js"), plugin_dir / "ddw.js")
+    shutil.copytree(os.path.join(ROOT, "ddw"), global_root / "ddw")
+    shutil.copytree(os.path.join(ROOT, "ddw"), home / "ddw")
+    (home / "package.json").write_text("{ not an owned package manifest", encoding="utf-8")
+    (global_root / "package.json").write_text('{"type":"module"}\n', encoding="utf-8")
+    if mixed:
+        skill = home / "skills/native-literal/SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_text(
+            "---\nname: \"native-literal\"\ndescription: |\n  Unrelated user skill.\nmetadata:\n  owner: user\n---\n\n# Native\n",
+            encoding="utf-8")
+    project = tmp_path / "project"
+    project.mkdir()
+    js = r'''
+import assert from "node:assert/strict";
+import { pathToFileURL } from "node:url";
+const plugin = (await import(pathToFileURL(process.argv[1]))).default;
+const hooks = {};
+let transforms = 0;
+await plugin.setup({
+  location: { directory: process.argv[2] },
+  skill: { transform: async () => { transforms += 1; } },
+  tool: { hook: async (name, fn) => { hooks[name] = fn; } },
+  session: { hook: async () => {} },
+  event: { subscribe: async function* () {} },
+});
+assert.equal(transforms, 0, "a parent ddw directory made global skills look packaged");
+assert.equal(typeof hooks["execute.before"], "function", "global plugin setup did not reach its gates");
+'''
+    r = subprocess.run(["node", "--input-type=module", "-e", js,
+                        str(plugin_dir / "ddw.js"), str(project)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+
+
 def test_opencode_v2_keeps_existing_native_skill_id(tmp_path):
     project = tmp_path / "project"
     project.mkdir()

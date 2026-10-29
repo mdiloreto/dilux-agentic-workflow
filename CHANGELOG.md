@@ -19,6 +19,22 @@ move at different speeds. So the promise is specific:
 
 ---
 
+## [0.60.8] - 2026-10-28
+
+### Fixed — standalone fork preview
+
+- Consolidate the verified baseline and V2 ownership fixes into one fork preview
+  with 681 installer checks and 808 mutations. Preserve the original 795 fault
+  indices; this version is not an upstream release.
+
+## [0.60.7] - 2026-10-28
+
+### Fixed — standalone fork preview
+
+- Verify OpenCode V2 package ownership from the plugin's actual package layout
+  and manifest entrypoint before transforming bundled skills. A global plugin
+  ignores unrelated parent `ddw/`, `skills/`, and package files.
+
 ## [0.60.6] - 2026-10-28
 
 ### Fixed — standalone fork preview
