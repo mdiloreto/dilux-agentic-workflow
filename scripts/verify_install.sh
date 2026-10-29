@@ -13027,8 +13027,8 @@ metadata:
 SKILL
   cat > "$WORK/opencode-steer-probe.mjs" <<PROBE
 import assert from "node:assert/strict"
-import { readFileSync, readdirSync } from "node:fs"
-import { join, resolve } from "node:path"
+import { readFileSync, readdirSync, realpathSync } from "node:fs"
+import { join } from "node:path"
 import packagePlugin from "$WORK/package/adapters/opencode/plugin/ddw.js"
 import globalPlugin from "$WORK/fakecfg/plugins/ddw.js"
 const setup = async (plugin, directory, existing = new Set()) => {
@@ -13056,7 +13056,7 @@ assert.equal(packaged.transforms, 1)
 assert.deepEqual(packaged.registered.map((skill) => skill.id).sort(),
   readdirSync("$WORK/package/skills").sort())
 const status = packaged.registered.find((skill) => skill.id === "ddw-status")
-assert.equal(status.path, resolve("$WORK/package/skills/ddw-status/SKILL.md"))
+assert.equal(status.path, realpathSync("$WORK/package/skills/ddw-status/SKILL.md"))
 assert.match(status.description, /Reads \.ddw-state\.json.*Trigger:/s)
 assert.equal(status.content, readFileSync(status.path, "utf8").replace(/^---\n[\s\S]*?\n---\n/, ""))
 assert.match(packaged.context.system[0]?.text || "", /DDW_BOOTSTRAP.*CLASSIFYING/s)
