@@ -1266,6 +1266,61 @@ assert.deepEqual(dropinSkills, []);
     assert r.returncode == 0, r.stderr
 
 
+def test_opencode_v2_installer_probe_uses_canonical_fixture_paths(tmp_path):
+    real = tmp_path / "real-work"
+    real.mkdir()
+    alias = tmp_path / "work-alias"
+    alias.symlink_to(real, target_is_directory=True)
+    js = r'''
+import assert from "node:assert/strict";
+import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { spawnSync } from "node:child_process";
+const [source, work] = process.argv.slice(1);
+mkdirSync(join(work, "fakecfg/plugins"), { recursive: true });
+mkdirSync(join(work, "blankrepo"));
+cpSync(join(source, "adapters/opencode/plugin/ddw.js"), join(work, "fakecfg/plugins/ddw.js"));
+cpSync(join(source, "ddw"), join(work, "fakecfg/ddw"), { recursive: true });
+cpSync(join(source, "skills"), join(work, "fakecfg/skills"), { recursive: true });
+mkdirSync(join(work, "dropinrepo"));
+cpSync(join(source, "ddw"), join(work, "dropinrepo/.ddw"), { recursive: true });
+mkdirSync(join(work, "package/adapters/opencode/plugin"), { recursive: true });
+cpSync(join(source, "adapters/opencode/plugin/ddw.js"), join(work, "package/adapters/opencode/plugin/ddw.js"));
+cpSync(join(source, "package.json"), join(work, "package/package.json"));
+cpSync(join(source, "ddw"), join(work, "package/ddw"), { recursive: true });
+cpSync(join(source, "skills"), join(work, "package/skills"), { recursive: true });
+mkdirSync(join(work, "fakecfg/skills/native-literal"));
+writeFileSync(join(work, "fakecfg/skills/native-literal/SKILL.md"), `---
+name: "native-literal"
+description: |
+  Native skill.
+---
+
+# Native
+`);
+cpSync(join(source, "ddw"), join(work, "ddw"), { recursive: true });
+mkdirSync(join(work, "skills/native-literal"), { recursive: true });
+writeFileSync(join(work, "skills/native-literal/SKILL.md"), `---
+name: "native-literal"
+description: |
+  Parent native skill.
+---
+
+# Native
+`);
+const installer = readFileSync(join(source, "scripts/verify_install.sh"), "utf8");
+const generated = /cat > "\$WORK\/opencode-steer-probe\.mjs" <<PROBE\n([\s\S]*?)\nPROBE/.exec(installer)?.[1];
+assert.ok(generated, "could not extract the installer V2 probe");
+const probe = join(work, "opencode-steer-probe.mjs");
+writeFileSync(probe, generated.replaceAll("$WORK", work));
+const result = spawnSync(process.execPath, [probe], { encoding: "utf8" });
+assert.equal(result.status, 0, result.stderr);
+'''
+    r = subprocess.run(["node", "--input-type=module", "-e", js, ROOT, str(alias)],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+
+
 def test_opencode_v2_global_skills_remain_native(tmp_path):
     global_root = tmp_path / "global/opencode"
     plugin_dir = global_root / "plugins"
