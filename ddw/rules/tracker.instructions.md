@@ -1,6 +1,6 @@
 ---
 applyTo: '**'
-version: 3.1.0
+version: 3.1.1
 ---
 
 # Ticket Tracker Conventions
@@ -122,7 +122,6 @@ E2E evidence:
 
 Tests: [X passed, Y total]. Coverage: [XX% lines, XX% branches].
 
-[AI-assisted]
 ```
 
 **E2E evidence is mandatory in the closing comment.** "Tests pass" is not enough — you need

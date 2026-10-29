@@ -602,16 +602,20 @@ MUTATIONS = [
      edit("ddw/scripts/validate-transition.py",
           "    _check_free_is_the_users_word(old_state, new_state, appended, replaying=_replaying)",
           "    _check_free_is_the_users_word(old_state, new_state, appended)")),
-    ("the commit gate stops reading forbidden signatures",
+    ("the fork commit gate requires disclosure for an optional coauthor again",
      edit("ddw/scripts/hook-gate.py",
-           '    bad = [m.group(0) for m in re.finditer(\n'
-           '        r"^[ \\t]*(Signed-off-by-AI|🤖 Generated with[^\\n]*)\\s*:?[^\\n]*$",\n'
-           '        body, re.IGNORECASE | re.MULTILINE)]',
-           '    bad = []')),
-    ("the forbidden-signature check goes case-sensitive and a lowercase signature sails through",
+           '    # NOT consumed here.',
+           '    with open(proposal, encoding="utf-8") as fh:\n'
+           '        if "Co-authored-by:" in fh.read():\n'
+           '            return "AI disclosure required"\n'
+           '    # NOT consumed here.')),
+    ("the fork commit gate rejects optional AI metadata again",
      edit("ddw/scripts/hook-gate.py",
-          '        body, re.IGNORECASE | re.MULTILINE)]',
-          '        body, re.MULTILINE)]')),
+           '    # NOT consumed here.',
+           '    with open(proposal, encoding="utf-8") as fh:\n'
+           '        if "AI-assisted:" in fh.read():\n'
+           '            return "AI metadata refused"\n'
+           '    # NOT consumed here.')),
     ("ripgrep is a write again: `rg` over the method comes back refused",
      edit("ddw/scripts/validate-transition.py",
           'READ_TOOLS = ("rg",)',
@@ -1667,40 +1671,36 @@ MUTATIONS = [
           "**Every\n   run, including a re-validation of a PRD that has not changed**",
           "**Every run**")),
 
-    # ── Attribution ──────────────────────────────────────────────────────────
-    # The rule DDW ships to every repo it is installed in, applied here. Each of
-    # these is a way the checker keeps returning success while checking nothing.
-    ("a model coauthor replaces disclosure instead of accompanying it",
-     edit("scripts/check_commits.py", "        if not TRAILER.search(body):",
-          "        if not (TRAILER.search(body) or re.search(r'^Co-authored-by:', body, re.M | re.I)):")),
-    ("a commit with no attribution at all stops being noticed",
-     edit("scripts/check_commits.py", "        if not TRAILER.search(body):",
-          "        if False:")),
-    # The exemption exists so the weekly dependency PR is not red on arrival.
-    # Losing it is not loud: nothing breaks until Monday, in a pull request
-    # nobody is watching, and the rule people learn is "the check is always red".
-    ("the bot exemption goes, and every dependency PR lands red",
-     edit("scripts/check_commits.py", "        if is_bot(name, email):",
-          "        if False:")),
-    # And the other direction: an exemption that stops naming who it exempted is
-    # a check that stopped running, wearing the same green.
-    ("a skipped commit stops being named and is only subtracted",
-     edit("scripts/check_commits.py",
-          '            skipped.append(f"{sha[:9]} {name}")',
-          "            pass")),
-    ("the pull request's own merge commit is held to the attribution rule again",
-     edit("scripts/check_commits.py", '"log", "--no-merges",', '"log",')),
-
-    ("a range git cannot read reports success instead of saying it did not run",
-     edit("scripts/check_commits.py",
-          '        print(f"check_commits: cannot read {args.since}..HEAD — the check did NOT run\\n"\n'
-          '              f"  {out.stderr.strip()}")\n'
-          "        return 1",
-          "        return 0")),
-    ("CI stops asking the question on the pull requests that carry the commits",
+    # ── The fork's optional-metadata policy ────────────────────────────────────
+    # Re-aim the retired policy faults without shrinking the measurement.
+    ("the retired attribution checker is restored at its old path",
+     copy_to("scripts/check_versions.py", "scripts/check_commits.py")),
+    ("commit rules require an AI trailer again",
+     edit("ddw/rules/commits.instructions.md",
+          "This fork requires no AI-specific trailers, PR labels or attribution sections.",
+          "Every commit requires an AI-assisted: yes trailer.")),
+    ("the PR command requires an AI label again",
+     edit("skills/ddw-create-pr/SKILL.md",
+          "gh pr create --body-file",
+          "gh pr create --label AI-assisted --body-file")),
+    ("the PR body template requires an attribution section again",
+     edit("skills/ddw-create-pr/SKILL.md",
+          "## Security\n- SAST:",
+          "## Attribution\nAI-assisted: yes\n\n## Security\n- SAST:")),
+    ("discovery requires an AI label again",
+     edit("ddw/rules/discovery.instructions.md",
+          "No AI-specific label is required.",
+          "An AI-assisted label is required.")),
+    ("tracker comments require an AI footer again",
+     edit("ddw/rules/tracker.instructions.md",
+          "Tests: [X passed, Y total]. Coverage: [XX% lines, XX% branches].",
+          "Tests: [X passed, Y total]. Coverage: [XX% lines, XX% branches].\n[AI-assisted]")),
+    ("fork CI invokes the retired attribution checker again",
      edit(".github/workflows/verify.yml",
-          "          python3 scripts/check_commits.py --since \"origin/${{ github.base_ref }}\"",
-          "          true")),
+          "      - name: The prose agrees with the machine\n",
+          "      - name: Require AI attribution\n"
+          "        run: python3 scripts/check_commits.py --since HEAD~1\n"
+          "      - name: The prose agrees with the machine\n")),
 
     # ── Versions ─────────────────────────────────────────────────────────────
     ("the product ships two different version numbers",
@@ -2271,9 +2271,9 @@ MUTATIONS = [
      edit(".github/workflows/release.yml", "scripts/verify_install.sh", "true # scripts/verify_install.sh")),
     ("a skill's whole protocol is replaced by a placeholder",
      edit("skills/ddw-help/SKILL.md", "/ddw-self-check", "/ddw-selfcheck")),
-    ("the commit template replaces required disclosure with a model trailer",
-     edit("skills/ddw-commit/SKILL.md", "AI-assisted: yes",
-          "Co-Authored-By: Claude <noreply@anthropic.com>")),
+    ("the generic commit template requires AI metadata again",
+     edit("skills/ddw-commit/SKILL.md", "Refs: <ticket>",
+          "Refs: <ticket>\nAI-assisted: yes")),
     ("the method resolves to the plugin even when the repo has its own copy",
      edit("adapters/claude/hooks/lib/guard.sh", "ddw_method() {",
           'ddw_method() {\n  [ -n "$CLAUDE_PLUGIN_ROOT" ] && [ -d "$CLAUDE_PLUGIN_ROOT/ddw" ] && { printf %s "$CLAUDE_PLUGIN_ROOT/ddw"; return 0; }')),
@@ -3004,10 +3004,10 @@ MUTATIONS = [
     ("a skill is left with its frontmatter `name` different from its directory",
          edit("skills/ddw-create-adr/SKILL.md",
               "name: ddw-create-adr", "name: create-adr")),
-    ("the attribution trailer is only searched for at the start of the message, not line by line",
-         edit("scripts/check_commits.py",
-              'TRAILER = re.compile(r"^(?:AI-assisted|AI-full):\\s*yes\\s*$", re.M | re.I)',
-              'TRAILER = re.compile(r"^(?:AI-assisted|AI-full):\\s*yes\\s*$", re.I)')),
+    ("an optional coauthor bypasses the commit approval seal",
+     edit("ddw/scripts/hook-gate.py",
+          "    if require_seal and sealed != digest:",
+          '    if require_seal and sealed != digest and "Co-authored-by" not in open(proposal, encoding="utf-8").read():')),
     ("the corrective loop returns to VERIFY with the gates it had invalidated",
          multi(  # ← a primitive that does not exist in mutate.py today
            json_edit("ddw/rules/transition-graph.json",

@@ -6,8 +6,6 @@ version: 2
 # notices a pinned action going stale until it stops working or turns out to
 # have a known problem.
 #
-# These arrive authored by a bot, which signs no attribution trailer and has
-# nothing to disclose; `scripts/check_commits.py` skips them by name and says so.
 updates:
   - package-ecosystem: github-actions
     directory: "/"

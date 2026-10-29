@@ -324,26 +324,14 @@ default proved nothing. That one was re-aimed at the call site, not deleted.
 list, and never a narrower mutation. The list only grows: each bug that gets
 past everything else earns its entry, so it can never come back unnoticed.
 
-### 4. `check_versions.py` and `check_commits.py` — the claims outside the method
+### 4. `check_versions.py` — the claims outside the method
 
-Two narrow checkers for two things that rot without breaking anything. The first
-reads the version and the licence from the files that own them and compares every
-copy — a manifest saying `UNLICENSED` next to an Apache-2.0 `LICENSE` is what npm
-reads, and no test notices. The second holds a **range** of commits to
-`commits.instructions.md`: `AI-assisted:` or `AI-full:` where a model helped.
-An optional model `Co-authored-by` does not replace that disclosure or shift
-responsibility away from the human Git author. Only a range, never the
-history behind it — that cannot be rewritten without breaking every clone.
+The checker reads the version and the licence from the files that own them and
+compares every copy — a manifest saying `UNLICENSED` next to an Apache-2.0 `LICENSE` is what npm
+reads, and no test notices. This fork does not enforce AI-specific commit
+metadata, PR labels or attribution sections.
 
-One exemption, and it is printed rather than assumed: a commit authored by a bot
-is skipped by name. The rule asks a person whether a model helped write
-something, and Dependabot bumping a pinned action is neither. Demanding the
-trailer from it would make every dependency pull request red on arrival, and a
-check that is red for a reason nobody can act on is a check people learn to click
-past. Two mutations hold both halves of that — the exemption disappearing, and
-the exemption going silent.
-
-CI runs both on pull requests, which is where the range exists.
+CI runs the version checker on pull requests and pushes.
 
 ### 5. CI — on two operating systems
 

@@ -3330,10 +3330,15 @@ cpg 'git add x && git commit -m "test: probe"' \
   && bad "a Copilot commit with -m sailed through — the message never had to come from the shown file" \
   || ok "Copilot's preToolUse holds a commit to the shown file (-F), the part of the gate that needs no seal"
 
-printf 'x feat: y\n\nRefs: F-1\nAI-assisted: yes\n' > "$CPG/.ddw-work/commit-message.txt"
+printf 'x feat: y\n\nRefs: F-1\n' > "$CPG/.ddw-work/commit-message.txt"
 cpg 'git commit -F .ddw-work/commit-message.txt' \
   && ok "and allows the sanctioned form with a clean proposal — partial is not closed" \
   || bad "the partial gate refuses the exact flow the skill teaches, which pushes models around it"
+
+printf 'feat(test): optional metadata\n\nCo-authored-by: Example Contributor <contributor@example.com>\n' > "$CPG/.ddw-work/commit-message.txt"
+cpg 'git commit -F .ddw-work/commit-message.txt' \
+  && ok "Copilot accepts optional coauthor metadata without requiring AI disclosure" \
+  || bad "Copilot's partial commit gate requires AI disclosure for optional metadata"
 
 printf '{"tier": "FEATURE", "phase": "CODE", "ticket": "F-1", "autonomy": "minimal", "gates": {}, "history": []}' > "$CPG/.ddw-state.json"
 cpg 'gh pr merge 2 --squash' \
@@ -5636,22 +5641,14 @@ echo '{}' | python3 "$SELF/ddw/scripts/validate-transition.py" --mode post \
   && ok "while a graph written before the field existed keeps working" \
   || bad "graphs with no format_version are refused — that is every repo that installed DDW earlier"
 
-# ── The commit convention, applied to the repository that publishes it ────────
-#
-# DDW requires `AI-assisted: yes` or `AI-full: yes` on every commit made with a
-# model. A required Co-authored-by trailer may accompany but not replace that
-# disclosure. The rule governed every repo DDW is installed in and nothing
-# here. Driven against real commits, because a checker for git history that is
-# never handed any is a checker of nothing.
-section "The attribution rule holds in this repository too"
+section "Version and fork-policy guarantees"
 
 # ── The version moves when what people install moves ──────────────────────────
 #
 # `--since` is the half of check_versions.py that makes the number mean
 # something, and nothing drove it: the suite called the script without a range,
 # so the rule existed and was never once exercised. A synthetic repo is what
-# gives it commits to have an opinion about — same reason check_commits.py has
-# one below.
+# gives it commits to have an opinion about.
 VB="$WORK/version-bump"; mkdir -p "$VB"
 git -C "$VB" init -q -b main .
 git -C "$VB" config user.email ddw@test; git -C "$VB" config user.name ddw
@@ -5759,7 +5756,7 @@ python3 "$SELF/scripts/check_versions.py" --repo "$VB" >/dev/null 2>&1 \
 
 # CI has to run the ranged form on a PUSH too. This repository's own work lands
 # straight on main, so a rule that only applies to pull requests is a rule it
-# exempts itself from — the shape the commit-attribution check was written for.
+# exempts itself from.
 python3 - "$SELF" <<'PYVBCI' && ok "and CI applies the rule to pushes, not only to pull requests" || bad "the version rule runs on pull requests alone, and this repo pushes to main"
 import re, sys, os
 y = open(os.path.join(sys.argv[1], ".github/workflows/verify.yml"), encoding="utf-8").read()
@@ -5771,104 +5768,83 @@ assert "HEAD~1" in body, ("the step only uses --since on pull_request; a push la
                           "range and the rule does not apply to this repo's own commits")
 PYVBCI
 
-CM="$WORK/commits"; mkdir -p "$CM"
-git -C "$CM" init -q -b main .
-git -C "$CM" config user.email ddw@test; git -C "$CM" config user.name ddw
-git -C "$CM" config commit.gpgsign false
-echo one > "$CM/a.txt"; git -C "$CM" add -A
-git -C "$CM" commit -q -m "base, before the range"
-CM_BASE="$(git -C "$CM" rev-parse HEAD)"
+[ ! -e "$SELF/scripts/check_commits.py" ] \
+  && ok "the fork retires the mandatory attribution checker" \
+  || bad "the retired attribution checker is shipped again"
 
-echo two > "$CM/a.txt"; git -C "$CM" add -A
-git -C "$CM" commit -q -F - <<'CMEOF'
-✨ a change that discloses how it was made
+python3 - "$SELF" <<'PYFORKCOMMITS' && ok "commit rules require no AI metadata" || bad "commit rules reintroduce mandatory AI metadata"
+import os, sys
+text = open(os.path.join(sys.argv[1], "ddw/rules/commits.instructions.md"), encoding="utf-8").read()
+assert "This fork requires no AI-specific trailers, PR labels or attribution sections." in text
+assert "AI-assisted:" not in text and "AI-full:" not in text
+PYFORKCOMMITS
 
-AI-assisted: yes
-CMEOF
-python3 "$SELF/scripts/check_commits.py" --repo "$CM" --since "$CM_BASE" >/dev/null 2>&1 \
-  && ok "an attributed commit passes" \
-  || bad "the attribution check rejects a commit that carries the trailer it asks for"
+python3 - "$SELF" <<'PYFORKPRLABEL' && ok "the PR command needs no AI label" || bad "the PR skill creates a mandatory AI label"
+import os, sys
+text = open(os.path.join(sys.argv[1], "skills/ddw-create-pr/SKILL.md"), encoding="utf-8").read()
+assert "gh pr create --body-file" in text
+assert "--label" not in text and "gh label create" not in text
+PYFORKPRLABEL
 
-# Carries both the disclosure and a model coauthor required by the harness.
-echo three > "$CM/a.txt"; git -C "$CM" add -A
-git -C "$CM" commit -q -F - <<'CMEOF'
-✨ a change that discloses the help and still names the tool as an author
+python3 - "$SELF" <<'PYFORKPRBODY' && ok "the PR template needs no attribution section" || bad "the PR template requires AI attribution"
+import os, sys
+text = open(os.path.join(sys.argv[1], "skills/ddw-create-pr/SKILL.md"), encoding="utf-8").read()
+assert "## Attribution" not in text
+assert "AI-assisted" not in text and "AI-full" not in text
+PYFORKPRBODY
 
-AI-assisted: yes
-Co-Authored-By: Some Model <noreply@example.com>
-CMEOF
-python3 "$SELF/scripts/check_commits.py" --repo "$CM" --since "$CM_BASE" >/dev/null 2>&1 \
-  && ok "and a model coauthor with disclosure is accepted" \
-  || bad "a model coauthor with disclosure was refused"
+python3 - "$SELF" <<'PYFORKDISCOVERY' && ok "discovery uses the same optional-metadata policy" || bad "discovery reintroduces an AI label"
+import os, sys
+text = open(os.path.join(sys.argv[1], "ddw/rules/discovery.instructions.md"), encoding="utf-8").read()
+assert "No AI-specific label is required." in text
+assert "AI-assisted" not in text and "AI-full" not in text
+PYFORKDISCOVERY
 
-git -C "$CM" reset -q --hard HEAD~1
-echo four > "$CM/a.txt"; git -C "$CM" add -A
-git -C "$CM" commit -q -F - <<'CMEOF'
-✨ a change that names only the model
+python3 - "$SELF" <<'PYFORKTRACKER' && ok "tracker comments keep evidence without an AI footer" || bad "tracker comments require an AI footer"
+import os, sys
+text = open(os.path.join(sys.argv[1], "ddw/rules/tracker.instructions.md"), encoding="utf-8").read()
+assert "E2E evidence:" in text and "Tests:" in text
+assert "AI-assisted" not in text and "AI-full" not in text
+PYFORKTRACKER
 
-Co-authored-by: Some Model <noreply@example.com>
-CMEOF
-python3 "$SELF/scripts/check_commits.py" --repo "$CM" --since "$CM_BASE" >/dev/null 2>&1 \
-  && bad "a model coauthor without disclosure passes" \
-  || ok "and a model coauthor cannot replace disclosure"
+python3 - "$SELF" <<'PYFORKCIPOLICY' && ok "fork CI does not run the retired checker" || bad "fork CI invokes the retired attribution checker"
+import os, sys
+text = open(os.path.join(sys.argv[1], ".github/workflows/verify.yml"), encoding="utf-8").read()
+assert "check_commits.py" not in text
+PYFORKCIPOLICY
 
-# A range git cannot read is not a range that passed. This is what a shallow
-# clone produces, and reporting it as success is how the check disappears.
-python3 "$SELF/scripts/check_commits.py" --repo "$CM" --since "no-such-ref" >/dev/null 2>&1 \
-  && bad "an unreadable range reports success — the check silently did not run" \
-  || ok "and an unreadable range is a failure, not a pass"
+python3 - "$SELF" <<'PYFORKAPPROVAL' && ok "optional metadata cannot grant or invalidate commit approval" || bad "metadata changes commit approval or requires disclosure"
+import json, os, subprocess, sys, tempfile
+src = sys.argv[1]
+gate = os.path.join(src, "ddw/scripts/hook-gate.py")
+graph = os.path.join(src, "ddw/rules/transition-graph.json")
+for metadata in ("", "Co-authored-by: Example Contributor <contributor@example.com>\n", "AI-assisted: yes\n"):
+    repo = tempfile.mkdtemp(dir=os.environ["WORK"])
+    state = os.path.join(repo, ".ddw-state.json")
+    with open(state, "w", encoding="utf-8") as fh:
+        json.dump({"phase": "DEFINE", "tier": "FEATURE", "ticket": "F-1",
+                   "autonomy": "assisted", "gates": {}, "history": []}, fh)
+    os.makedirs(os.path.join(repo, ".ddw-work"))
+    proposal = os.path.join(repo, ".ddw-work/commit-message.txt")
+    message = "feat(test): approved change\n\nRefs: F-1\n" + metadata
+    with open(proposal, "w", encoding="utf-8") as fh:
+        fh.write(message)
+    def run(mode):
+        event = {"tool_name": "Bash", "tool_input": {"command": "git commit -F .ddw-work/commit-message.txt"}}
+        return subprocess.run([sys.executable, gate, "--mode", mode, "--state", state,
+                               "--graph", graph, "--repo", repo], input=json.dumps(event),
+                              capture_output=True, text=True)
+    assert run("commit").returncode == 2, "metadata bypassed approval"
+    assert run("turn").returncode == 0
+    approved = run("commit")
+    assert approved.returncode == 0, approved.stdout + approved.stderr
+    with open(proposal, "a", encoding="utf-8") as fh:
+        fh.write("changed after approval\n")
+    assert run("commit").returncode == 2, "metadata bypassed the exact-message seal"
+PYFORKAPPROVAL
 
-# Dependabot opens a pull request every week and signs nothing: the rule asks a
-# person whether a model helped, and there is no person here. Without this the
-# dependency PRs are red on arrival, every one of them, and a rule that is red
-# for a reason nobody can act on is a rule people learn to click past.
-git -C "$CM" reset -q --hard HEAD~1
-echo bumped > "$CM/a.txt"; git -C "$CM" add -A
-git -C "$CM" -c user.name='dependabot[bot]' \
-    -c user.email='49699333+dependabot[bot]@users.noreply.github.com' \
-    commit -q -m "⬆️ chore(ci): bump actions/checkout from 7.0.0 to 7.0.1"
-CM_BOT="$(python3 "$SELF/scripts/check_commits.py" --repo "$CM" --since "$CM_BASE" 2>&1)" \
-  && ok "a bot's dependency bump is not asked to disclose help nobody gave it" \
-  || bad "the attribution check rejects Dependabot, so every dependency PR lands red"
-
-# An exemption that does not say who it exempted is indistinguishable from a
-# check that stopped running. The count going down has to be visible.
-case "$CM_BOT" in
-  *"skipped"*"dependabot[bot]"*)
-    ok "and it names the commit it skipped instead of quietly subtracting it" ;;
-  *) bad "the bot commit vanishes from the count with nothing said about it" ;;
-esac
-
-# The exemption is for the bot, not for the shape of its message. A person who
-# forgets the trailer is still refused, in the same range, right after.
-echo human > "$CM/a.txt"; git -C "$CM" add -A
-git -C "$CM" commit -q -m "✨ a person's change, disclosing nothing"
-python3 "$SELF/scripts/check_commits.py" --repo "$CM" --since "$CM_BASE" >/dev/null 2>&1 \
-  && bad "one bot commit in the range excuses the humans in it too" \
-  || ok "and a person in the same range is still held to the rule"
-git -C "$CM" reset -q --hard HEAD~2
-
-# The commit a pull request is actually tested on is one GitHub fabricates —
-# `refs/pull/N/merge`, authored by GitHub, carrying no trailer, never landing in
-# anyone's history. Held to the rule, it fails every pull request forever, over a
-# commit nobody wrote. Found the first time this check ever ran on a real one.
-git -C "$CM" checkout -q -b cm-branch
-echo merged > "$CM/b.txt"; git -C "$CM" add -A
-git -C "$CM" commit -q -F - <<'CMEOF'
-✨ work on the branch
-
-AI-assisted: yes
-CMEOF
-git -C "$CM" checkout -q main
-git -C "$CM" merge -q --no-ff cm-branch -m "Merge cm-branch into main" >/dev/null 2>&1
-python3 "$SELF/scripts/check_commits.py" --repo "$CM" --since "$CM_BASE" >/dev/null 2>&1 \
-  && ok "the merge commit a pull request is tested on is not held to a rule about authorship" \
-  || bad "every pull request fails on GitHub's own merge commit — a rule applied to a commit nobody wrote"
-git -C "$CM" reset -q --hard HEAD~2
-
-# A checker nothing invokes is a file, not a gate. The pull request is the only
-# place the range exists, which is the one event it has to run on.
-python3 - "$SELF" <<'PYCI' && ok "and CI runs it on pull requests, where the commits arrive" || bad "check_commits.py is in the repo and nothing calls it — see above"
+# Required quality steps remain in CI after the metadata-only policy is retired.
+python3 - "$SELF" <<'PYCI' && ok "CI retains its required quality steps" || bad "a required CI quality step is missing or cannot fail"
 import os, sys
 try:
     import yaml
@@ -5877,10 +5853,6 @@ except ImportError:
 wf = yaml.safe_load(open(os.path.join(sys.argv[1], ".github/workflows/verify.yml"),
                         encoding="utf-8"))
 steps = [s for job in wf["jobs"].values() for s in job.get("steps", [])]
-runs = [s for s in steps if "check_commits.py" in str(s.get("run", ""))]
-assert runs, "verify.yml never runs scripts/check_commits.py"
-assert any("pull_request" in str(s.get("if", "")) for s in runs), \
-    "the attribution step is not gated on pull_request, where the range it needs exists"
 
 # The required status contexts are the JOB names, not the steps inside them. So a
 # pull request that deletes the two lines that actually run the suite and the
@@ -7576,13 +7548,7 @@ if not complete:
          f"{WORDS.get(passed)} of {WORDS.get(len(verdicts))}")
 PYCLAUDE
 
-# A step that dies at its first command never ran, and a step that only runs on
-# pull requests dies unwatched in a repository whose work lands on main. Both
-# pull-request-only steps carried `git fetch --depth=0` — not "no limit" but
-# `fatal: depth 0 is not a positive number` — so the version rule and the
-# attribution rule had never once been applied to a pull request. It surfaced on
-# the first one this repository ever opened, which is the whole argument for
-# opening one.
+# The version range needs a usable fetch: `--depth=0` is an error, not "no limit".
 python3 - "$SELF" <<'PYFETCH' && ok "CI's pull-request fetch is a command git will actually run" || bad "a fetch in verify.yml cannot execute, so the step that needs it has never run"
 import os, re, sys
 y = open(os.path.join(sys.argv[1], ".github/workflows/verify.yml"), encoding="utf-8").read()
@@ -11633,7 +11599,7 @@ python3 - "$SELF" <<'PYSKILLS' && ok "every skill's load-bearing claim is assert
 import os, re, sys
 src = sys.argv[1]
 CLAIMS = {
-    "ddw-commit":            ["AI-assisted:", "gitmoji", "git status"],
+    "ddw-commit":            ["commit-message.txt", "gitmoji", "git status"],
     "ddw-create-adr":        ["docs/adr/", "ADR"],
     "ddw-create-pr":         ["gh pr create", "gates.pr"],
     "ddw-create-prd":        ["docs/ddw/prd/", "PRD loops"],
@@ -12343,34 +12309,27 @@ for rel, call in pre:
         "root is outside the repo, and every guard on DDW's own files answers 'not ours'" % rel
 PYMETHODARG
 
-# /ddw-commit's template against the rule this repo enforces on itself. The
-# template could be changed to emit the trailer `check_commits.py` refuses, and
-# nothing joined the two — so the skill would teach every user to write a commit
-# DDW's own checker rejects.
-python3 - "$SELF" <<'PYTRAILER' && ok "the commit template writes the attribution the repo's own checker demands" || bad "the commit skill's template and the attribution rule disagree — the skill teaches a commit DDW rejects"
+# Generic templates do not invent AI metadata or rewrite the configured Git author.
+python3 - "$SELF" <<'PYTRAILER' && ok "the commit template preserves ordinary Git authorship without AI metadata" || bad "the commit template requires AI metadata or changes the author"
 import os, re, subprocess, sys, tempfile
 src = sys.argv[1]
 skill = open(os.path.join(src, "skills/ddw-commit/SKILL.md"), encoding="utf-8").read()
 assert "Co-Authored-By" not in skill, \
     "the generic template must not invent a model identity"
-m = re.search(r"^AI-assisted:.*$", skill, re.M)
-assert m, "the template no longer carries the attribution trailer at all"
-# Through the checker, not against a string: a commit written the way the skill
-# says has to pass the script that guards this repo's own history.
+assert "AI-assisted:" not in skill and "AI-full:" not in skill
+m = re.search(r"^Refs:.*$", skill, re.M)
+assert m, "the commit template no longer references its ticket"
 repo = tempfile.mkdtemp(dir=os.environ["WORK"])
 subprocess.run(["git", "-C", repo, "init", "-q", "-b", "main"], check=True)
 for k, v in (("user.email", "ddw@test"), ("user.name", "ddw"), ("commit.gpgsign", "false")):
     subprocess.run(["git", "-C", repo, "config", k, v], check=True)
 subprocess.run(["git", "-C", repo, "commit", "-q", "--allow-empty", "-m", "base"], check=True)
-base = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"],
-                      capture_output=True, text=True).stdout.strip()
 subprocess.run(["git", "-C", repo, "commit", "-q", "--allow-empty", "-F", "-"],
                input="✨ feat(x): a thing the skill would write\n\n%s\n" % m.group(0),
                text=True, check=True)
-r = subprocess.run([sys.executable, os.path.join(src, "scripts/check_commits.py"),
-                    "--repo", repo, "--since", base], capture_output=True, text=True)
-assert r.returncode == 0, \
-    "a commit written from the skill's own template is refused:\n" + (r.stdout + r.stderr)[-300:]
+author = subprocess.run(["git", "-C", repo, "log", "-1", "--format=%an <%ae>"],
+                        capture_output=True, text=True, check=True).stdout.strip()
+assert author == "ddw <ddw@test>", author
 PYTRAILER
 
 python3 - "$ALL" <<'PYEOF' && ok "a resume requires a pause, from the phase it paused at" || bad "the word resume is a skeleton key: it opens an edge from IDLE to any phase, with any gates"

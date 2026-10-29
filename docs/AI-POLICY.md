@@ -92,12 +92,10 @@ the underlying guarantee true has broken the only thing anyone is buying.
    and this repository has shipped several. `docs/RATIONALE.md` §10 explains why
    the mutation carries as much weight as the fix.
 
-9. **Commits here follow the convention DAW itself prescribes.** Gitmoji,
-   conventional type, and the `AI-assisted: yes` / `AI-full: yes` trailer that
-    `ddw/rules/commits.instructions.md` calls mandatory. A model coauthor trailer
-    may also be present when the coding environment requires it; it cannot
-    replace the disclosure or the human author's responsibility. The commit
-    message says what *the change* does, without prefaces or apologies.
+9. **Commits here follow the convention DAW itself prescribes.** Gitmoji and
+   conventional type/scope describe the change. This fork requires no AI-specific
+   trailers, PR labels or attribution sections. Preserve the configured Git author
+   and existing history; optional metadata does not replace review or approval.
 
 10. **Don't volume-spam the project with model-generated PRs.** Twenty drive-by
     PRs of speculative refactors are not contributions, they are a denial of

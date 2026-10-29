@@ -1,7 +1,7 @@
 ---
 name: ddw-create-pr
 description: >
-  Opens a Pull Request with a standard format and AI attribution labels, or records why one is not
+  Opens a Pull Request with a standard format, or records why one is not
   possible in this repo.
   Trigger: /ddw-create-pr, during DDW's CLOSEOUT phase.
 ---
@@ -9,7 +9,7 @@ description: >
 # Skill: /ddw-create-pr
 
 ## Description
-Opens a Pull Request with a standard format and AI attribution labels. If this repo cannot host a
+Opens a Pull Request with a standard format. If this repo cannot host a
 PR, records why — so the closeout is never blocked by something outside the user's control.
 
 ## Inputs
@@ -69,17 +69,13 @@ missing and offer the options:
 
 1. Run `git status`, `git diff <base>...HEAD`, `git log <base>...HEAD`.
 2. Analyze ALL the branch's commits, not just the last one.
-3. Check the GitHub labels exist:
-   - `AI-assisted` (color `#1D76DB`)
-   - `AI-full` (color `#7057FF`)
-   - If they do not exist → create them with `gh label create`.
-4. Write the PR title and body.
-5. Present them to the user for approval.
-6. Only after approval → save the body to `.ddw-work/pr-body.md` **with the Write
+3. Write the PR title and body. No AI-specific labels or attribution section are required.
+4. Present them to the user for approval.
+5. Only after approval → save the body to `.ddw-work/pr-body.md` **with the Write
    tool** (never a shell heredoc — a file written through the shell is a file no
    hook saw happen), then create it with
-   `gh pr create --label <AI-assisted|AI-full> --body-file .ddw-work/pr-body.md`.
-7. Return the PR's URL.
+   `gh pr create --body-file .ddw-work/pr-body.md`.
+6. Return the PR's URL.
 
 ## PR Format
 
@@ -104,8 +100,6 @@ Body:
 ## Security
 - SAST: PASSED ([date])
 
-## Attribution
-[AI-assisted | AI-full]: [description of the level of human supervision]
 ```
 
 ## Rules
@@ -116,12 +110,8 @@ Body:
   whether this PR waits for feedback or merges now. Use `--draft` only if the user asks for it.
 - The body travels by file: `.ddw-work/pr-body.md`, written with the Write tool — NEVER a shell
   heredoc — and passed with `--body-file`.
-- ALWAYS include the `AI-assisted` or `AI-full` label with `--label`.
-- ALWAYS include the Attribution section in the body.
 - NEVER create a PR without the user's confirmation.
 - NEVER merge automatically.
-- NEVER include `🤖 Generated with Claude Code` or similar footers in the body. Attribution is done
-  exclusively through the `## Attribution` section and the GitHub label.
 
 ## Output Format
 
@@ -133,7 +123,6 @@ Body:
 │  PR: #[number]                                           │
 │  URL: [url]                                              │
 │  Title: [title]                                          │
-│  Label: [AI-assisted | AI-full]                          │
 │  Status: Open — ready for review                         │
 │                                                          │
 └─────────────────────────────────────────────────────────┘

@@ -19,6 +19,16 @@ move at different speeds. So the promise is specific:
 
 ---
 
+## [0.60.1] - 2026-10-28
+
+### Changed — standalone fork preview
+
+- Remove this fork's mandatory AI-attribution trailers, PR labels and sections.
+  Commit-message approval, phase transitions, tests, SAST and closeout gates stay
+  enforced. Normal Git authorship and existing history are preserved.
+- Re-aim attribution-policy checks and mutations at optional metadata and the
+  remaining approval and CI guarantees; do not claim this as an upstream release.
+
 ## [0.60.0] - 2026-10-26
 
 ### Added — direct implementation from an existing OpenSpec baseline

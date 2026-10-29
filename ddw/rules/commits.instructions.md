@@ -1,6 +1,6 @@
 ---
 applyTo: '**'
-version: 2.3.0
+version: 2.4.0
 ---
 
 # Commit and PR Conventions
@@ -15,7 +15,6 @@ version: 2.3.0
 <optional body>
 
 Refs: <ticket>
-AI-assisted: yes
 ```
 
 **One commit = one atomic change.** Commits should be as small as possible. One block of the spec =
@@ -118,36 +117,11 @@ noise, and the gate does not ask for a commit — it asks for the work to be on 
   must not be committed.
 - Do not commit while there are unresolved blocking gates.
 
-## AI Attribution — Mandatory Trailer
+## Git Metadata
 
-Every commit produced with AI assistance MUST include a trailer:
-
-| Level | Meaning | When to use |
-|-------|---------|-------------|
-| `AI-assisted: yes` | AI helped, a human reviewed and approved **this change** | The human read the diff or the presented message before it landed |
-| `AI-full: yes` | AI generated the whole change with no human review of it | No human saw this change before it was committed |
-
-**What decides between them is whether a human reviewed THIS change — and the state already
-records that.** Under `assisted`, every commit message waits for the user's answer, so
-`AI-assisted: yes` is the honest trailer. Under `minimal`, the arrows stop waiting and nobody
-reads the diff before it lands: the honest trailer is `AI-full: yes`, unless the user actually
-reviewed this particular change (they interrupted, read it, said so). "The human gave the
-instructions at CLASSIFY" does not make a commit reviewed — an instruction is not a review, and
-a trailer that stretches it that far says nothing at all. The two rows used to contradict each
-other for exactly this case, and a live run switched trailers mid-ticket when the model re-read
-the table and resolved the tie the other way. Read `autonomy` from `.ddw-state.json` and be
-consistent for as long as the mode is.
-
-**The trailer goes as the last line of the commit message**, separated from the body by a blank
-line.
-
-**NEVER create a commit without one of these trailers.**
-
-`Co-authored-by` is allowed when the coding environment requires attribution to
-a model whose contribution remains in the commit. It is **not** a substitute for
-`AI-assisted: yes` or `AI-full: yes`, and the configured human Git author still
-owns the commit. Do not add it for mere review, research or advice. If required,
-append it after the disclosure trailer, separated by a blank line.
+This fork requires no AI-specific trailers, PR labels or attribution sections.
+Preserve the configured Git author and existing history. Optional trailers follow the
+contributor's coding environment; they neither grant nor replace commit approval.
 
 ## Full Examples
 
@@ -158,7 +132,6 @@ Implements POST /api/auth/login with credential validation
 and JWT generation with a configurable expiry.
 
 Refs: FEAT-001
-AI-assisted: yes
 ```
 
 ```
@@ -169,11 +142,9 @@ the subtotal. Root cause: wrong order of operations in
 calculateTotal().
 
 Refs: FIX-003
-AI-assisted: yes
 ```
 
-A `minimal` run's commit — same shape, the other trailer, because nobody read this diff before it
-landed (`AI-full` had no worked example, and the trailer without one was the one nobody picked):
+A background task uses the same commit format:
 
 ```
 ✨ feat(tickets): process triage in the background
@@ -183,7 +154,6 @@ valid ticket without leaking category, group or draft in the public
 response.
 
 Refs: FEAT-001b
-AI-full: yes
 ```
 
 ## PR Format
@@ -194,26 +164,6 @@ way to tell which.
 
 **One PR = one ticket.** PRs should also be as small as possible. If the spec has many blocks,
 consider one PR per coherent group of blocks (but always within the same ticket).
-
-## GitHub Labels for PRs
-
-| Label | Color | When to apply |
-|-------|-------|---------------|
-| `AI-assisted` | `#1D76DB` (blue) | The PR's commits carry `AI-assisted: yes` — a human reviewed the changes |
-| `AI-full` | `#7057FF` (purple) | The PR's commits carry `AI-full: yes` — no human reviewed them before they landed |
-
-**The label follows the trailers, and the same criterion decides both** (see the trailer table
-above: what matters is whether a human reviewed THIS work, which `autonomy` already records).
-A PR mixing both trailers takes `AI-full` — the stronger claim wins, because a reader trusts the
-label as the floor of human review, not its ceiling. These two rows used to restate the trailer
-ambiguity in their own words ("with AI assistance" / "100% by AI"), which is two criteria for one
-question, one document apart.
-
-**NEVER create a PR without an AI attribution label.**
-
-**NEVER use `🤖 Generated with Claude Code` or similar footers in the PR body.** Attribution is done
-exclusively through the `## Attribution` section in the body and the GitHub label (`AI-assisted` or
-`AI-full`). Any tool-generated footer must be omitted.
 
 ## Notes for the Agent
 

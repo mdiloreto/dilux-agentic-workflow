@@ -790,7 +790,7 @@ def test_un_sub_prd_mas_grande_que_el_umbral_avisa(tmp_path):
 GATE = os.path.join(ROOT, "ddw/scripts/hook-gate.py")
 GRAPH_PATH = os.path.join(ROOT, "ddw/rules/transition-graph.json")
 PROPOSAL = os.path.join(".ddw-work", "commit-message.txt")
-MENSAJE = "\U0001F4DD docs(prd): definir el triage\n\nRefs: F-1\nAI-assisted: yes\n"
+MENSAJE = "\U0001F4DD docs(prd): definir el triage\n\nRefs: F-1\n"
 
 
 def _repo_en_define(tmp_path, autonomy="assisted"):
@@ -840,25 +840,30 @@ def test_un_commit_visto_y_contestado_pasa_al_primer_intento(tmp_path):
     assert _commit(tmp_path).returncode == 0, "the approved commit was refused anyway"
 
 
-def test_coauthor_con_divulgacion_pasa_y_sin_ella_no(tmp_path):
+@pytest.mark.parametrize("metadata", [
+    "",
+    "Co-authored-by: Example Contributor <contributor@example.com>\n",
+    "AI-assisted: yes\n",
+    "AI-full: yes\n",
+    "Signed-off-by-AI: optional metadata\n",
+    "🤖 Generated with an optional tool\n",
+])
+def test_approved_commit_does_not_require_ai_metadata(tmp_path, metadata):
     _repo_en_define(tmp_path)
-    mensaje = MENSAJE.rstrip("\n") + "\nCo-authored-by: GPT-6 Sol <noreply@openai.com>\n"
-    _propone(tmp_path, mensaje)
+    _propone(tmp_path, MENSAJE + metadata)
     _habla_el_usuario(tmp_path)
     r = _commit(tmp_path)
-    assert r.returncode == 0, "a disclosed coauthor was refused: " + (r.stdout + r.stderr)[-200:]
-
-    _propone(tmp_path, "feat(test): test\n\nCo-authored-by: GPT-6 Sol <noreply@openai.com>\n")
-    _habla_el_usuario(tmp_path)
-    r = _commit(tmp_path)
-    assert r.returncode == 2
-    assert "AI-assisted" in (r.stdout + r.stderr)
+    assert r.returncode == 0, "approved metadata was refused: " + (r.stdout + r.stderr)[-200:]
 
 
-def test_firma_ai_no_reemplaza_divulgacion(tmp_path):
+@pytest.mark.parametrize("metadata", [
+    "",
+    "Co-authored-by: Example Contributor <contributor@example.com>\n",
+    "AI-assisted: yes\n",
+])
+def test_optional_metadata_does_not_replace_commit_approval(tmp_path, metadata):
     _repo_en_define(tmp_path)
-    _propone(tmp_path, MENSAJE + "signed-off-by-ai: bot\n")
-    _habla_el_usuario(tmp_path)
+    _propone(tmp_path, MENSAJE + metadata)
     assert _commit(tmp_path).returncode == 2
 
 
