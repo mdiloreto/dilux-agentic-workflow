@@ -1187,6 +1187,7 @@ const hooks = {};
 const sessions = {};
 await plugin.setup({
   location: { directory: process.argv[2] },
+  skill: { transform: async () => {} },
   tool: { hook: async (name, fn) => { hooks[name] = fn; } },
   session: { hook: async (name, fn) => { sessions[name] = fn; } },
   event: { subscribe: async function* () {} },
@@ -1218,6 +1219,147 @@ await assert.rejects(
     assert r.returncode == 0, r.stderr
 
 
+def test_opencode_v2_registers_packaged_skills_without_overriding_dropin(tmp_path):
+    plugin_only = tmp_path / "plugin-only"
+    plugin_only.mkdir()
+    dropin = tmp_path / "dropin"
+    shutil.copytree(os.path.join(ROOT, "ddw"), dropin / ".ddw")
+    js = r'''
+import assert from "node:assert/strict";
+import { readFileSync, readdirSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+const plugin = (await import(pathToFileURL(process.argv[1]))).default;
+const setup = async (directory, registered) => {
+  let transforms = 0;
+  await plugin.setup({
+    location: { directory },
+    skill: { transform: async (apply) => {
+      transforms += 1;
+      apply({ get: () => undefined, add: (skill) => registered.push(skill) });
+    } },
+    tool: { hook: async () => {} },
+    session: { hook: async () => {} },
+    event: { subscribe: async function* () {} },
+  });
+  return transforms;
+};
+const packaged = [];
+assert.equal(await setup(process.argv[2], packaged), 1, "plugin-only setup did not register packaged skills");
+const root = process.argv[4];
+const names = readdirSync(join(root, "skills")).sort();
+assert.deepEqual(packaged.map((skill) => skill.id).sort(), names);
+const status = packaged.find((skill) => skill.id === "ddw-status");
+assert.equal(status.name, "ddw-status");
+assert.match(status.description, /Reads \.ddw-state\.json.*Trigger:/s, "folded description was not loaded");
+assert.equal(status.path, resolve(root, "skills", "ddw-status", "SKILL.md"));
+const statusSource = readFileSync(status.path, "utf8");
+assert.equal(status.content, statusSource.replace(/^---\n[\s\S]*?\n---\n/, ""));
+assert.match(status.content, /^# Skill: \/ddw-status/m, "frontmatter leaked into skill content");
+const dropinSkills = [];
+assert.equal(await setup(process.argv[3], dropinSkills), 0, "drop-in setup overrode native skill discovery");
+assert.deepEqual(dropinSkills, []);
+'''
+    r = subprocess.run(["node", "--input-type=module", "-e", js,
+                        os.path.join(ROOT, "adapters/opencode/plugin/ddw.js"),
+                        str(plugin_only), str(dropin), ROOT], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+
+
+def test_opencode_v2_global_skills_remain_native(tmp_path):
+    global_root = tmp_path / "global/opencode"
+    plugin_dir = global_root / "plugins"
+    plugin_dir.mkdir(parents=True)
+    shutil.copy(os.path.join(ROOT, "adapters/opencode/plugin/ddw.js"), plugin_dir / "ddw.js")
+    shutil.copytree(os.path.join(ROOT, "ddw"), global_root / "ddw")
+    shutil.copytree(os.path.join(ROOT, "skills"), global_root / "skills")
+    (global_root / "package.json").write_text('{"type":"module"}\n', encoding="utf-8")
+    (global_root / "skills/ddw-status/SKILL.md").write_text(
+        "---\nname: \"ddw-status\"\ndescription: |\n  User override.\nmetadata:\n  owner: user\n---\n\n# Override\n",
+        encoding="utf-8")
+    project = tmp_path / "project"
+    project.mkdir()
+    js = r'''
+import assert from "node:assert/strict";
+import { pathToFileURL } from "node:url";
+const plugin = (await import(pathToFileURL(process.argv[1]))).default;
+const hooks = {};
+let transforms = 0;
+await plugin.setup({
+  location: { directory: process.argv[2] },
+  skill: { transform: async () => { transforms += 1; } },
+  tool: { hook: async (name, fn) => { hooks[name] = fn; } },
+  session: { hook: async () => {} },
+  event: { subscribe: async function* () {} },
+});
+assert.equal(transforms, 0, "global native skills were parsed and re-registered");
+assert.equal(typeof hooks["execute.before"], "function", "global plugin setup did not reach its gates");
+'''
+    r = subprocess.run(["node", "--input-type=module", "-e", js,
+                        str(plugin_dir / "ddw.js"), str(project)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+
+
+def test_opencode_v2_keeps_existing_native_skill_id(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    js = r'''
+import assert from "node:assert/strict";
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+const plugin = (await import(pathToFileURL(process.argv[1]))).default;
+const added = [];
+await plugin.setup({
+  location: { directory: process.argv[2] },
+  skill: { transform: async (apply) => apply({
+    get: (id) => id === "ddw-status" ? { id } : undefined,
+    add: (skill) => added.push(skill),
+  }) },
+  tool: { hook: async () => {} },
+  session: { hook: async () => {} },
+  event: { subscribe: async function* () {} },
+});
+assert.equal(added.some((skill) => skill.id === "ddw-status"), false, "native ddw-status was overwritten");
+assert.equal(added.length, readdirSync(join(process.argv[3], "skills")).length - 1);
+'''
+    r = subprocess.run(["node", "--input-type=module", "-e", js,
+                        os.path.join(ROOT, "adapters/opencode/plugin/ddw.js"), str(project), ROOT],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+
+
+def test_opencode_v2_rejects_malformed_packaged_skill(tmp_path):
+    package = tmp_path / "package"
+    plugin_dir = package / "adapters/opencode/plugin"
+    plugin_dir.mkdir(parents=True)
+    shutil.copy(os.path.join(ROOT, "package.json"), package / "package.json")
+    shutil.copy(os.path.join(ROOT, "adapters/opencode/plugin/ddw.js"), plugin_dir / "ddw.js")
+    shutil.copytree(os.path.join(ROOT, "ddw"), package / "ddw")
+    shutil.copytree(os.path.join(ROOT, "skills"), package / "skills")
+    (package / "skills/ddw-status/SKILL.md").write_text("---\nname: ddw-status\n---\n", encoding="utf-8")
+    project = tmp_path / "project"
+    project.mkdir()
+    js = r'''
+import assert from "node:assert/strict";
+import { pathToFileURL } from "node:url";
+const plugin = (await import(pathToFileURL(process.argv[1]))).default;
+await assert.rejects(
+  plugin.setup({
+    location: { directory: process.argv[2] },
+    skill: { transform: async () => assert.fail("malformed skill reached registration") },
+    tool: { hook: async () => {} },
+    session: { hook: async () => {} },
+    event: { subscribe: async function* () {} },
+  }),
+  /DDW: packaged skill .*ddw-status\/SKILL\.md has no usable 'description'/,
+);
+'''
+    r = subprocess.run(["node", "--input-type=module", "-e", js,
+                        str(plugin_dir / "ddw.js"), str(project)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+
+
 def test_opencode_v2_bootstrap_distinguishes_dropin_from_plugin(tmp_path):
     dropin = tmp_path / "dropin"
     shutil.copytree(os.path.join(ROOT, "ddw"), dropin / ".ddw")
@@ -1231,6 +1373,7 @@ for (const [directory, isDropin] of [[process.argv[2], true], [process.argv[3], 
   let context;
   await plugin.setup({
     location: { directory },
+    skill: { transform: async () => {} },
     tool: { hook: async () => {} },
     session: { hook: async (name, fn) => {
       if (name === "context") { context = { system: [] }; fn(context); }

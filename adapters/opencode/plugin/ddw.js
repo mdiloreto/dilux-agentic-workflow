@@ -6,8 +6,8 @@
 // arguments and piped to the validator on stdin: that is the only way it can
 // judge a write that has not happened yet. Run with stdin closed it sees an
 // empty envelope, exits 0, and the `throw` below becomes unreachable.
-import { existsSync, readFileSync, realpathSync } from "node:fs"
-import { dirname, join } from "node:path"
+import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs"
+import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { execFileSync } from "node:child_process"
 
@@ -20,6 +20,73 @@ const WRITE_TOOLS = new Set(["write", "edit", "apply_patch", "bash"])
 const POST_TOOLS = new Set([...WRITE_TOOLS, "bash"])
 const BOOT_MARK = "<DDW_BOOTSTRAP>"
 
+const packagedSkillError = (path, message) => {
+  throw new Error(`DDW: packaged skill ${path} ${message}`)
+}
+
+const parsePackagedSkill = (path, directory) => {
+  let source
+  try {
+    source = readFileSync(path, "utf8")
+  } catch (error) {
+    packagedSkillError(path, `could not be read: ${error.message}`)
+  }
+  const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/.exec(source)
+  if (!frontmatter) packagedSkillError(path, "has no complete frontmatter")
+
+  const fields = {}
+  const lines = frontmatter[1].split(/\r?\n/)
+  for (let index = 0; index < lines.length; index += 1) {
+    const field = /^([A-Za-z][A-Za-z0-9_-]*):[ \t]*(.*)$/.exec(lines[index])
+    if (!field) packagedSkillError(path, `has unsupported frontmatter line ${index + 1}`)
+    const [, key, value] = field
+    if (Object.hasOwn(fields, key)) packagedSkillError(path, `repeats '${key}' in its frontmatter`)
+    if (key === "description" && /^>[+-]?$/.test(value)) {
+      const folded = []
+      for (index += 1; index < lines.length; index += 1) {
+        const line = lines[index]
+        if (!line.trim()) {
+          folded.push("")
+          continue
+        }
+        if (!/^\s/.test(line)) {
+          index -= 1
+          break
+        }
+        folded.push(line.trim())
+      }
+      fields.description = folded.filter(Boolean).join(" ")
+      continue
+    }
+    if (/^[>|]/.test(value)) packagedSkillError(path, `has unsupported '${key}' scalar`)
+    fields[key] = value
+  }
+  for (const key of ["name", "description"]) {
+    if (!fields[key]) packagedSkillError(path, `has no usable '${key}' in its frontmatter`)
+  }
+  if (fields.name !== directory) {
+    packagedSkillError(path, `declares name '${fields.name}', expected '${directory}'`)
+  }
+  return { id: fields.name, name: fields.name, description: fields.description, path, content: frontmatter[2] }
+}
+
+const loadPackagedSkills = (ddw) => {
+  const root = resolve(ddw, "..", "skills")
+  let entries
+  try {
+    entries = readdirSync(root, { withFileTypes: true })
+  } catch (error) {
+    packagedSkillError(root, `could not be read: ${error.message}`)
+  }
+  const directories = entries.filter((entry) => entry.isDirectory()).sort((a, b) => a.name.localeCompare(b.name))
+  if (!directories.length) packagedSkillError(root, "contains no skill directories")
+  return directories.map((entry) => {
+    const path = resolve(root, entry.name, "SKILL.md")
+    if (!existsSync(path)) packagedSkillError(path, "is missing")
+    return parsePackagedSkill(path, entry.name)
+  })
+}
+
 const methodFor = (directory) => {
   // Repo first, plugin second — the same resolution the Claude plugin's hooks
   // use. A repo that carries its own .ddw/ (drop-in, or vendored to diverge)
@@ -30,11 +97,11 @@ const methodFor = (directory) => {
   // the link, and the method must be found next to the real file.
   const here = dirname(realpathSync(fileURLToPath(import.meta.url)))
   const candidates = [
-    join(directory, ".ddw"),            // drop-in: the repo's own method
-    join(here, "..", "..", "..", "ddw"), // package layout: adapters/opencode/plugin/ → repo root
-    join(here, "..", "ddw"),            // global install: ~/.config/opencode/plugins/ → ~/.config/opencode/ddw
+    { kind: "dropin", path: join(directory, ".ddw") },
+    { kind: "package", path: join(here, "..", "..", "..", "ddw") },
+    { kind: "global", path: join(here, "..", "ddw") },
   ]
-  return candidates.find((c) => existsSync(join(c, "scripts", "hook-gate.py"))) ?? candidates[0]
+  return candidates.find((candidate) => existsSync(join(candidate.path, "scripts", "hook-gate.py"))) ?? candidates[0]
 }
 
 const bootstrapFor = (ddw, state) => {
@@ -70,7 +137,7 @@ const bootstrapFor = (ddw, state) => {
 }
 
 export const DdwPlugin = async ({ directory }) => {
-  const ddw = methodFor(directory)
+  const ddw = methodFor(directory).path
   const state = join(directory, ".ddw-state.json")
   // The skills travel next to the method (repo root of the package). The
   // drop-in does not need this — its skills are installed to .opencode/skills,
@@ -233,9 +300,18 @@ export default {
   id: "ddw",
   async setup(ctx) {
     const directory = ctx.location.directory
-    const ddw = methodFor(directory)
+    const method = methodFor(directory)
+    const ddw = method.path
     const legacy = await DdwPlugin({ directory })
     const toolName = (tool) => ({ patch: "apply_patch", shell: "bash" })[tool] ?? tool
+    if (method.kind === "package") {
+      const skills = loadPackagedSkills(ddw)
+      await ctx.skill.transform((editor) => {
+        skills.forEach((skill) => {
+          if (!editor.get(skill.id)) editor.add(skill)
+        })
+      })
+    }
     await ctx.tool.hook("execute.before", (event) => {
       const tool = toolName(event.tool)
       const args = event.tool === "patch" ? event.input.patchText : event.input

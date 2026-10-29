@@ -19,6 +19,21 @@ move at different speeds. So the promise is specific:
 
 ---
 
+## [0.60.5] - 2026-10-28
+
+### Fixed
+
+- Restrict OpenCode V2 packaged-skill transforms to package-owned assets. Native
+  global and drop-in skill discovery remains authoritative, and an existing
+  native skill ID is never overwritten.
+
+## [0.60.3] - 2026-10-28
+
+### Fixed
+
+- Register packaged OpenCode skills through the V2 skill transform in plugin-only
+  installs while preserving native drop-in skill discovery and its overrides.
+
 ## [0.60.1] - 2026-10-28
 
 ### Changed — standalone fork preview

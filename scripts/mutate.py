@@ -685,8 +685,8 @@ MUTATIONS = [
           "      return")),
     ("the plugin forgets the global method and only ever looks in the repo",
      edit("adapters/opencode/plugin/ddw.js",
-          '    join(here, "..", "ddw"),            // global install: ~/.config/opencode/plugins/ → ~/.config/opencode/ddw\n',
-          '')),
+           '    { kind: "global", path: join(here, "..", "ddw") },\n',
+           '')),
     ("the recovery advice points at git for a file git never had",
      edit("ddw/scripts/hook-gate.py",
           "The user's recovery is restoring their own backup",
@@ -3700,6 +3700,25 @@ MUTATIONS = [
      edit("ddw/rules/transition-graph.json",
           '"gates": ["tests", "sast"]',
           '"gates": ["tests"]')),
+    ("the V2 plugin stops registering packaged skills through its documented transform",
+     edit("adapters/opencode/plugin/ddw.js",
+          "    if (method.kind === \"package\") {\n"
+          "      const skills = loadPackagedSkills(ddw)\n"
+          "      await ctx.skill.transform((editor) => {\n"
+          "        skills.forEach((skill) => {\n"
+          "          if (!editor.get(skill.id)) editor.add(skill)\n"
+          "        })\n"
+          "      })\n"
+          "    }\n",
+          "")),
+    ("the V2 plugin parses global native skills instead of leaving discovery authoritative",
+     edit("adapters/opencode/plugin/ddw.js",
+          '    if (method.kind === "package") {',
+          "    if (true) {")),
+    ("the V2 plugin re-registers a native skill that already owns the ID",
+     edit("adapters/opencode/plugin/ddw.js",
+          "          if (!editor.get(skill.id)) editor.add(skill)",
+          "          editor.add(skill)")),
 ]
 
 

@@ -30,7 +30,7 @@ set -uo pipefail
 # a knob anyone could turn from outside the file. `docs/AI-POLICY.md` and
 # `CONTRIBUTING.md` both name this variable as the thing not to soften; it was
 # softenable without editing the file they were talking about.
-EXPECT_CHECKS=673
+EXPECT_CHECKS=675
 EXPECT_SKILLS=20
 EXPECT_AGENTS=5
 EXPECT_RULES=14
@@ -40,7 +40,7 @@ EXPECT_ADAPTERS=6
 # `--check-anchors`, `--cover` and every check in this file green, and the
 # published percentage went on being a percentage of a smaller list. The same
 # reason `EXPECT_CHECKS` exists, one file over.
-EXPECT_MUTATIONS=795
+EXPECT_MUTATIONS=798
 
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # EXPORTED, because the Python blocks below anchor their own temporary
@@ -12757,13 +12757,10 @@ PROBE
     && bad "OpenCode global install: no .ddw/ in the repo and the plugin enforced NOTHING" \
     || ok "OpenCode global install still enforces: the method is found next to the plugin"
 
-  # A plugin install that enforces but never steers is the failure the first
-  # live PRD run showed: the model coded a monorepo straight from IDLE. The
-  # steering is two hooks — skills registered with OpenCode's discovery, and a
-  # bootstrap prefixed to the first user message — and both have to survive.
-  mkdir -p "$WORK/fakecfg/skills/ddw-classify"
-  printf '%s\n' "name: ddw-classify" > "$WORK/fakecfg/skills/ddw-classify/SKILL.md"
-  cat > "$WORK/opencode-steer-probe.mjs" <<PROBE
+  # Keep the V1 entrypoint covered: it remains exported for existing installs
+  # even though V2 itself uses the documented skill transform below.
+  cp -r "$SELF/skills" "$WORK/fakecfg/skills"
+  cat > "$WORK/opencode-v1-steer-probe.mjs" <<PROBE
 import { DdwPlugin } from "$WORK/fakecfg/plugins/ddw.js"
 const p = await DdwPlugin({ directory: "$WORK/blankrepo" })
 const config = {}
@@ -12779,9 +12776,86 @@ await p["experimental.chat.messages.transform"]({}, output)
 const once = output.messages[0].parts.filter((x) => x.text?.includes("DDW_BOOTSTRAP")).length === 1
 process.exit(registered && steered && once ? 0 : 2)
 PROBE
+  node "$WORK/opencode-v1-steer-probe.mjs" >/dev/null 2>&1 \
+    && ok "OpenCode V1 plugin steers: skills registered, bootstrap rides the first message, once" \
+    || bad "OpenCode V1 plugin install enforces but does not steer — the PRD-to-monorepo failure is back"
+
+  # A plugin install that enforces but never steers is the failure the first
+  # live PRD run showed: the model coded a monorepo straight from IDLE. V2
+  # needs its documented skill transform only from its package layout. Both a
+  # drop-in and the global skills root are native discovery space, so they must
+  # never enter DDW's deliberately strict package parser.
+  mkdir -p "$WORK/dropinrepo"
+  cp -r "$SELF/ddw" "$WORK/dropinrepo/.ddw"
+  mkdir -p "$WORK/package/adapters/opencode/plugin"
+  cp "$SELF/adapters/opencode/plugin/ddw.js" "$WORK/package/adapters/opencode/plugin/ddw.js"
+  cp -r "$SELF/ddw" "$WORK/package/ddw"
+  cp -r "$SELF/skills" "$WORK/package/skills"
+  mkdir -p "$WORK/fakecfg/skills/native-literal"
+  cat > "$WORK/fakecfg/skills/native-literal/SKILL.md" <<'SKILL'
+---
+name: "native-literal"
+description: |
+  An unrelated native skill using a literal YAML scalar.
+metadata:
+  owner: user
+---
+
+# Native literal skill
+SKILL
+  cat > "$WORK/opencode-steer-probe.mjs" <<PROBE
+import assert from "node:assert/strict"
+import { readFileSync, readdirSync } from "node:fs"
+import { join, resolve } from "node:path"
+import packagePlugin from "$WORK/package/adapters/opencode/plugin/ddw.js"
+import globalPlugin from "$WORK/fakecfg/plugins/ddw.js"
+const setup = async (plugin, directory, existing = new Set()) => {
+  const registered = []
+  const hooks = {}
+  let transforms = 0
+  const context = { system: [] }
+  await plugin.setup({
+    location: { directory },
+    skill: { transform: async (apply) => {
+      transforms += 1
+      apply({
+        get: (id) => existing.has(id) ? { id } : undefined,
+        add: (skill) => registered.push(skill),
+      })
+    } },
+    tool: { hook: async (name, apply) => { hooks[name] = apply } },
+    session: { hook: async (name, apply) => { if (name === "context") apply(context) } },
+    event: { subscribe: async function* () {} },
+  })
+  return { registered, transforms, context, hooks }
+}
+const packaged = await setup(packagePlugin, "$WORK/blankrepo")
+assert.equal(packaged.transforms, 1)
+assert.deepEqual(packaged.registered.map((skill) => skill.id).sort(),
+  readdirSync("$WORK/package/skills").sort())
+const status = packaged.registered.find((skill) => skill.id === "ddw-status")
+assert.equal(status.path, resolve("$WORK/package/skills/ddw-status/SKILL.md"))
+assert.match(status.description, /Reads \.ddw-state\.json.*Trigger:/s)
+assert.equal(status.content, readFileSync(status.path, "utf8").replace(/^---\n[\s\S]*?\n---\n/, ""))
+assert.match(packaged.context.system[0]?.text || "", /DDW_BOOTSTRAP.*CLASSIFYING/s)
+const nativeOverride = await setup(packagePlugin, "$WORK/blankrepo", new Set(["ddw-status"]))
+assert.equal(nativeOverride.registered.some((skill) => skill.id === "ddw-status"), false)
+assert.equal(nativeOverride.registered.length, readdirSync("$WORK/package/skills").length - 1)
+const dropin = await setup(packagePlugin, "$WORK/dropinrepo")
+assert.equal(dropin.transforms, 0)
+assert.deepEqual(dropin.registered, [])
+const global = await setup(globalPlugin, "$WORK/blankrepo")
+assert.equal(global.transforms, 0)
+assert.deepEqual(global.registered, [])
+assert.equal(typeof global.hooks["execute.before"], "function")
+assert.match(global.context.system[0]?.text || "", /DDW_BOOTSTRAP.*CLASSIFYING/s)
+PROBE
   node "$WORK/opencode-steer-probe.mjs" >/dev/null 2>&1 \
-    && ok "OpenCode plugin steers: skills registered, bootstrap rides the first message, once" \
-    || bad "OpenCode plugin install enforces but does not steer — the PRD-to-monorepo failure is back"
+    && ok "OpenCode V2 registers packaged skills and preserves native ID overrides and drop-ins" \
+    || bad "OpenCode V2 skill registration or drop-in override is broken"
+  node "$WORK/opencode-steer-probe.mjs" >/dev/null 2>&1 \
+    && ok "OpenCode V2 leaves mixed global native skills to discovery while gates stay active" \
+    || bad "OpenCode V2 parses global native skills or skips its global gates"
 else
   echo "  · node not available — OpenCode's plugin was not exercised"
 fi
