@@ -1,6 +1,6 @@
 ---
 applyTo: '**'
-version: 2.6.0
+version: 2.6.1
 ---
 
 # Phase 3: CODE (Implementation)
@@ -92,8 +92,9 @@ If this is a new session (the agent just started and `phase` was already `CODE`)
 
 Read **all** capability specs in `openspec/specs/*/spec.md` and inspect the
 existing code. Identify the ticket's bounded, still-missing slice against
-those requirements. The OpenSpec baseline is input, not a new proposed change;
-do not create a DAW PRD, spec plan or OpenSpec change merely to clear a gate.
+those requirements. The OpenSpec baseline stays read-only during CODE and
+CLOSEOUT, including through symlinked paths. Do not create a DAW PRD, spec plan
+or OpenSpec change merely to clear a gate.
 If the baseline leaves a product decision unanswered or contradicts itself,
 stop and ask instead of inventing it. Do not modify `openspec/specs/` to
 pre-approve an implementation decision.

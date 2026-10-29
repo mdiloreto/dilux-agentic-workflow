@@ -1,6 +1,6 @@
 ---
 applyTo: '**'
-version: 2.9.0
+version: 2.9.1
 ---
 
 # State — Schema and Management of `.ddw-state.json`
@@ -55,6 +55,12 @@ worth asking six months later: what became of this piece of work.
 They also carry weight now. A closeout resets `ticket` to `null`, so **the entry is the only place
 the finished ticket's name survives** — which is what lets the session boot work out that a split
 PRD has sub-tickets nobody has run yet, without inventing a second place to store it.
+
+For `OPENSPEC-DIRECT`, the helper also stamps `baseline_digest` on CLASSIFY→CODE.
+It binds the ticket to the existing OpenSpec baseline's paths and content, not
+its semantic validity. Active tickets and unverified closing edges must match
+that fingerprint; a missing binding stops explicitly. A fully journalled IDLE
+closeout releases the binding, so later work can update the baseline.
 
 **A stamped `ticket` must be the ticket in hand** — the state's value before the write, or after it.
 The FSM refuses anything else: an entry free to name any ticket could credit a closeout to work that

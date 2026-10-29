@@ -78,3 +78,11 @@ a new `openspec/changes/` delta, a DAW PRD/plan, OpenSpec validation, or
 spec-based module verification. CODE still owes test and SAST receipts before
 CLOSEOUT; CLOSEOUT still owes a commit and PR. If the baseline cannot resolve
 a requirement, stop and ask. No other tier changes its existing gates.
+
+During a direct ticket's CODE and CLOSEOUT, agent writes to `openspec/specs/`
+and its parent paths are refused. The baseline is input, not an artifact to
+rewrite to fit the implementation. A requirements change needs a separate
+decision and workflow. The direct entry binds the whole baseline tree's
+paths and bytes; post-write validation stops the ticket if it later drifts,
+including after a shell write. This does not attest baseline semantics or
+validity.

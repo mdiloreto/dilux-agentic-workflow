@@ -30,7 +30,7 @@ set -uo pipefail
 # a knob anyone could turn from outside the file. `docs/AI-POLICY.md` and
 # `CONTRIBUTING.md` both name this variable as the thing not to soften; it was
 # softenable without editing the file they were talking about.
-EXPECT_CHECKS=675
+EXPECT_CHECKS=681
 EXPECT_SKILLS=20
 EXPECT_AGENTS=5
 EXPECT_RULES=14
@@ -40,7 +40,7 @@ EXPECT_ADAPTERS=6
 # `--check-anchors`, `--cover` and every check in this file green, and the
 # published percentage went on being a percentage of a smaller list. The same
 # reason `EXPECT_CHECKS` exists, one file over.
-EXPECT_MUTATIONS=798
+EXPECT_MUTATIONS=807
 
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # EXPORTED, because the Python blocks below anchor their own temporary
@@ -5842,6 +5842,214 @@ for metadata in ("", "Co-authored-by: Example Contributor <contributor@example.c
         fh.write("changed after approval\n")
     assert run("commit").returncode == 2, "metadata bypassed the exact-message seal"
 PYFORKAPPROVAL
+
+python3 - "$SELF" <<'PYDIRECTBASELINE' && ok "a direct ticket keeps its baseline read-only while allowing implementation writes" || bad "a direct ticket rewrites its baseline or cannot write its implementation"
+import json, os, subprocess, sys, tempfile
+src = sys.argv[1]
+with tempfile.TemporaryDirectory(dir=os.environ["WORK"]) as repo:
+    state = os.path.join(repo, ".ddw-state.json")
+    with open(state, "w", encoding="utf-8") as fh:
+        json.dump({"phase": "CODE", "tier": "OPENSPEC-DIRECT", "ticket": "F-1",
+                   "gates": {}, "history": []}, fh)
+    command = [sys.executable, os.path.join(src, "ddw/scripts/hook-gate.py"), "--mode", "pre",
+               "--repo", repo, "--state", state, "--graph", os.path.join(src, "ddw/rules/transition-graph.json")]
+    for target, expected in (("openspec/specs/payments/spec.md", 2), ("src/payments.py", 0)):
+        event = {"tool_name": "Write", "tool_input": {"file_path": os.path.join(repo, target), "content": "changed"}}
+        result = subprocess.run(command, input=json.dumps(event), capture_output=True, text=True)
+        assert result.returncode == expected, result.stdout + result.stderr
+        if expected == 2:
+            assert "baseline" in (result.stdout + result.stderr).lower()
+PYDIRECTBASELINE
+
+python3 - "$SELF" <<'PYDIRECTBASELINEPOST' && ok "a direct ticket stops after its baseline drifts through a shell" || bad "a direct ticket blesses a shell-rewritten baseline"
+import json, os, subprocess, sys, tempfile
+src = sys.argv[1]
+sys.path.insert(0, os.path.join(src, "ddw", "scripts"))
+import openspec_bridge
+with tempfile.TemporaryDirectory(dir=os.environ["WORK"]) as repo:
+    with open(os.path.join(repo, "AGENTS.md"), "w", encoding="utf-8") as fh:
+        fh.write("## Specification framework\nSpec format: OpenSpec\n")
+    baseline = os.path.join(repo, "openspec", "specs", "payments", "spec.md")
+    os.makedirs(os.path.dirname(baseline))
+    with open(baseline, "w", encoding="utf-8") as fh:
+        fh.write("# Approved payments\n")
+    history = [
+        {"timestamp": "2026-08-06T10:00:00Z", "from": "IDLE", "to": "CLASSIFY",
+         "action": "classify", "tier": "OPENSPEC-DIRECT", "ticket": "F-1"},
+        {"timestamp": "2026-08-06T10:00:00Z", "from": "CLASSIFY", "to": "CODE",
+         "action": "existing baseline", "tier": "OPENSPEC-DIRECT", "ticket": "F-1",
+         "baseline_digest": openspec_bridge.baseline_digest(repo)},
+    ]
+    state = os.path.join(repo, ".ddw-state.json")
+    with open(state, "w", encoding="utf-8") as fh:
+        json.dump({"phase": "CODE", "tier": "OPENSPEC-DIRECT", "ticket": "F-1",
+                   "gates": {}, "history": history}, fh)
+    with open(os.path.join(repo, ".ddw-journal.jsonl"), "w", encoding="utf-8") as fh:
+        for item in history:
+            fh.write(json.dumps(item) + "\n")
+    with open(baseline, "w", encoding="utf-8") as fh:
+        fh.write("# Shell-rewritten payments\n")
+    result = subprocess.run(
+        [sys.executable, os.path.join(src, "ddw", "scripts", "hook-gate.py"), "--mode", "post",
+         "--repo", repo, "--state", state,
+         "--graph", os.path.join(src, "ddw", "rules", "transition-graph.json")],
+        capture_output=True, text=True)
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "baseline" in (result.stdout + result.stderr).lower()
+PYDIRECTBASELINEPOST
+
+python3 - "$SELF" <<'PYDIRECTBASELINEJOURNAL' && ok "a direct ticket cannot restamp its journalled baseline entry" || bad "a direct ticket can replace its journalled baseline binding"
+import json, os, subprocess, sys, tempfile
+src = sys.argv[1]
+sys.path.insert(0, os.path.join(src, "ddw", "scripts"))
+import openspec_bridge
+with tempfile.TemporaryDirectory(dir=os.environ["WORK"]) as repo:
+    open(os.path.join(repo, "AGENTS.md"), "w", encoding="utf-8").write(
+        "## Specification framework\nSpec format: OpenSpec\n")
+    baseline = os.path.join(repo, "openspec", "specs", "payments", "spec.md")
+    os.makedirs(os.path.dirname(baseline))
+    open(baseline, "w", encoding="utf-8").write("# Approved payments\n")
+    history = [
+        {"timestamp": "2026-08-06T10:00:00Z", "from": "IDLE", "to": "CLASSIFY",
+         "action": "classify", "tier": "OPENSPEC-DIRECT", "ticket": "F-1"},
+        {"timestamp": "2026-08-06T10:00:00Z", "from": "CLASSIFY", "to": "CODE",
+         "action": "bound entry", "tier": "OPENSPEC-DIRECT", "ticket": "F-1",
+         "baseline_digest": openspec_bridge.baseline_digest(repo)},
+    ]
+    state = os.path.join(repo, ".ddw-state.json")
+    json.dump({"phase": "CODE", "tier": "OPENSPEC-DIRECT", "ticket": "F-1",
+               "gates": {}, "history": history}, open(state, "w", encoding="utf-8"))
+    command = [sys.executable, os.path.join(src, "ddw/scripts/hook-gate.py"), "--mode", "post",
+               "--repo", repo, "--state", state,
+               "--graph", os.path.join(src, "ddw/rules/transition-graph.json")]
+    assert subprocess.run(command, capture_output=True, text=True).returncode == 0
+    journal_path = os.path.join(repo, ".ddw-journal.jsonl")
+    journal = open(journal_path, encoding="utf-8").read()
+    open(baseline, "w", encoding="utf-8").write("# Changed payments\n")
+    disk = json.load(open(state, encoding="utf-8"))
+    disk["history"][-1].update(timestamp="2026-08-06T11:00:00Z", action="restamped entry",
+                                baseline_digest=openspec_bridge.baseline_digest(repo))
+    json.dump(disk, open(state, "w", encoding="utf-8"))
+    result = subprocess.run(command, capture_output=True, text=True)
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "journal" in (result.stdout + result.stderr).lower()
+    assert open(journal_path, encoding="utf-8").read() == journal
+PYDIRECTBASELINEJOURNAL
+
+python3 - "$SELF" <<'PYDIRECTBASELINERESUME' && ok "a paused direct ticket keeps its own bound baseline on resume" || bad "a paused direct ticket loses or replaces its baseline binding"
+import json, os, subprocess, sys, tempfile
+src = sys.argv[1]
+sys.path.insert(0, os.path.join(src, "ddw", "scripts"))
+import openspec_bridge
+graph = os.path.join(src, "ddw/rules/transition-graph.json")
+gate = os.path.join(src, "ddw/scripts/hook-gate.py")
+transition = os.path.join(src, "ddw/scripts/transition.py")
+def setup():
+    repo = tempfile.mkdtemp(dir=os.environ["WORK"])
+    open(os.path.join(repo, "AGENTS.md"), "w", encoding="utf-8").write(
+        "## Specification framework\nSpec format: OpenSpec\n")
+    baseline = os.path.join(repo, "openspec", "specs", "payments", "spec.md")
+    os.makedirs(os.path.dirname(baseline))
+    open(baseline, "w", encoding="utf-8").write("# Approved payments\n")
+    history = [
+        {"timestamp": "2026-08-06T10:00:00Z", "from": "IDLE", "to": "CLASSIFY",
+         "action": "classify", "tier": "OPENSPEC-DIRECT", "ticket": "F-1"},
+        {"timestamp": "2026-08-06T10:00:00Z", "from": "CLASSIFY", "to": "CODE",
+         "action": "bound entry", "tier": "OPENSPEC-DIRECT", "ticket": "F-1",
+         "baseline_digest": openspec_bridge.baseline_digest(repo)},
+    ]
+    state = os.path.join(repo, ".ddw-state.json")
+    json.dump({"phase": "CODE", "tier": "OPENSPEC-DIRECT", "ticket": "F-1",
+               "gates": {}, "history": history}, open(state, "w", encoding="utf-8"))
+    post = [sys.executable, gate, "--mode", "post", "--repo", repo, "--state", state, "--graph", graph]
+    assert subprocess.run(post, capture_output=True, text=True).returncode == 0
+    pause = [sys.executable, transition, "--state", state, "--graph", graph,
+             "--to", "IDLE", "--action", "pause: later", "--write"]
+    assert subprocess.run(pause, cwd=repo, capture_output=True, text=True).returncode == 0
+    assert subprocess.run(post, capture_output=True, text=True).returncode == 0
+    return repo, baseline, state, post
+repo, baseline, state, post = setup()
+resume = [sys.executable, transition, "--state", state, "--graph", graph,
+          "--to", "CODE", "--action", "resume: unchanged", "--write"]
+assert subprocess.run(resume, cwd=repo, capture_output=True, text=True).returncode == 0
+assert subprocess.run(post, capture_output=True, text=True).returncode == 0
+repo, baseline, state, post = setup()
+open(baseline, "w", encoding="utf-8").write("# Changed payments\n")
+resume = [sys.executable, transition, "--state", state, "--graph", graph,
+          "--to", "CODE", "--action", "resume: drifted", "--write"]
+result = subprocess.run(resume, cwd=repo, capture_output=True, text=True)
+assert result.returncode == 2 and "changed after" in result.stderr.lower(), result.stderr
+disk = json.load(open(state, encoding="utf-8"))
+disk.update(phase="CODE", tier="OPENSPEC-DIRECT", ticket="F-1")
+disk["history"].append({"timestamp": "2026-08-06T11:00:00Z", "from": "IDLE", "to": "CODE",
+                        "action": "resume: shell", "tier": "OPENSPEC-DIRECT", "ticket": "F-1"})
+json.dump(disk, open(state, "w", encoding="utf-8"))
+result = subprocess.run(post, capture_output=True, text=True)
+assert result.returncode == 2 and "changed after" in result.stderr.lower(), result.stdout + result.stderr
+PYDIRECTBASELINERESUME
+
+python3 - "$SELF" <<'PYDIRECTBASELINERELEASE' && ok "a completed direct ticket releases its baseline after verified closeout" || bad "a completed direct ticket still locks the baseline for later work"
+import json, os, subprocess, sys, tempfile
+src = sys.argv[1]
+sys.path.insert(0, os.path.join(src, "ddw", "scripts"))
+import openspec_bridge
+with tempfile.TemporaryDirectory(dir=os.environ["WORK"]) as repo:
+    with open(os.path.join(repo, "AGENTS.md"), "w", encoding="utf-8") as fh:
+        fh.write("## Specification framework\nSpec format: OpenSpec\n")
+    baseline = os.path.join(repo, "openspec", "specs", "payments", "spec.md")
+    os.makedirs(os.path.dirname(baseline))
+    with open(baseline, "w", encoding="utf-8") as fh:
+        fh.write("# Approved payments\n")
+    edges = (("IDLE", "CLASSIFY"), ("CLASSIFY", "CODE"), ("CODE", "CLOSEOUT"), ("CLOSEOUT", "IDLE"))
+    history = [{"timestamp": "2026-08-06T10:00:00Z", "from": a, "to": b,
+                "action": "completed", "tier": "OPENSPEC-DIRECT", "ticket": "F-1"} for a, b in edges]
+    history[1]["baseline_digest"] = openspec_bridge.baseline_digest(repo)
+    state = os.path.join(repo, ".ddw-state.json")
+    with open(state, "w", encoding="utf-8") as fh:
+        json.dump({"phase": "IDLE", "tier": None, "ticket": None, "gates": {}, "history": history}, fh)
+    with open(os.path.join(repo, ".ddw-journal.jsonl"), "w", encoding="utf-8") as fh:
+        for item in history:
+            fh.write(json.dumps(item) + "\n")
+    with open(baseline, "w", encoding="utf-8") as fh:
+        fh.write("# Requirements for a later ticket\n")
+    result = subprocess.run(
+        [sys.executable, os.path.join(src, "ddw", "scripts", "hook-gate.py"), "--mode", "post",
+         "--repo", repo, "--state", state, "--graph", os.path.join(src, "ddw", "rules", "transition-graph.json")],
+        capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+PYDIRECTBASELINERELEASE
+
+python3 - "$SELF" <<'PYDIRECTCANONICALCLOSE' && ok "a direct closeout cannot release its baseline using a different same-length journal" || bad "a noncanonical direct closeout releases its baseline by count alone"
+import json, os, subprocess, sys, tempfile
+src = sys.argv[1]
+sys.path.insert(0, os.path.join(src, "ddw", "scripts"))
+import openspec_bridge
+with tempfile.TemporaryDirectory(dir=os.environ["WORK"]) as repo:
+    with open(os.path.join(repo, "AGENTS.md"), "w", encoding="utf-8") as fh:
+        fh.write("## Specification framework\nSpec format: OpenSpec\n")
+    baseline = os.path.join(repo, "openspec", "specs", "payments", "spec.md")
+    os.makedirs(os.path.dirname(baseline))
+    with open(baseline, "w", encoding="utf-8") as fh:
+        fh.write("# Approved payments\n")
+    edges = (("IDLE", "CLASSIFY"), ("CLASSIFY", "CODE"), ("CODE", "CLOSEOUT"), ("CLOSEOUT", "IDLE"))
+    history = [{"timestamp": "2026-08-06T10:00:00Z", "from": a, "to": b,
+                "action": "close direct ticket", "tier": "OPENSPEC-DIRECT", "ticket": "F-1"} for a, b in edges]
+    history[1]["baseline_digest"] = openspec_bridge.baseline_digest(repo)
+    state = os.path.join(repo, ".ddw-state.json")
+    with open(state, "w", encoding="utf-8") as fh:
+        json.dump({"phase": "IDLE", "tier": None, "ticket": None, "gates": {}, "history": history}, fh)
+    with open(os.path.join(repo, ".ddw-journal.jsonl"), "w", encoding="utf-8") as fh:
+        for item in history[:-1] + [{**history[-1], "action": "different closing record"}]:
+            fh.write(json.dumps(item) + "\n")
+    with open(baseline, "w", encoding="utf-8") as fh:
+        fh.write("# Changed before unverified closeout\n")
+    result = subprocess.run(
+        [sys.executable, os.path.join(src, "ddw", "scripts", "hook-gate.py"), "--mode", "post",
+         "--repo", repo, "--state", state, "--graph", os.path.join(src, "ddw", "rules", "transition-graph.json")],
+        capture_output=True, text=True)
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "journal" in (result.stdout + result.stderr).lower()
+PYDIRECTCANONICALCLOSE
 
 # Required quality steps remain in CI after the metadata-only policy is retired.
 python3 - "$SELF" <<'PYCI' && ok "CI retains its required quality steps" || bad "a required CI quality step is missing or cannot fail"

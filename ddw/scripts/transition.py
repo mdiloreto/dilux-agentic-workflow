@@ -652,6 +652,16 @@ def main():
                                  args.clear_gates, autonomy=args.autonomy, edge_clears=_clears,
                                  ticket=args.ticket, title=args.title,
                                  tracker=args.tracker)
+    if args.direct_openspec:
+        root = os.path.dirname(os.path.abspath(args.state))
+        if vt.openspec_bridge.opted_in(root):
+            try:
+                new_state["history"][-1]["baseline_digest"] = (
+                    vt.openspec_bridge.baseline_digest(root)
+                )
+            except vt.openspec_bridge.OpenSpecError as exc:
+                print(f"ddw-transition: {exc}", file=sys.stderr)
+                sys.exit(2)
 
     # A gate that rests on evidence is asked for it here too — the same function
     # the hook calls, never a second copy. This helper used to hold the only

@@ -28,6 +28,83 @@ class OpenSpecError(ValueError):
     """The selected OpenSpec change cannot back a DAW gate."""
 
 
+def baseline_digest(root: str) -> str:
+    """Return a stable digest of the direct mode's existing OpenSpec baseline."""
+    root = os.path.realpath(root)
+    openspec = os.path.join(root, "openspec")
+    baseline = os.path.join(openspec, "specs")
+    for path in (openspec, baseline):
+        rel = os.path.relpath(path, root).replace(os.sep, "/")
+        try:
+            mode = os.lstat(path).st_mode
+        except OSError as exc:
+            raise OpenSpecError(
+                "OpenSpec direct mode requires openspec/specs/ in this repository"
+            ) from exc
+        if stat.S_ISLNK(mode):
+            raise OpenSpecError(f"symlink in OpenSpec baseline: {rel}")
+        if not stat.S_ISDIR(mode):
+            raise OpenSpecError(
+                "OpenSpec direct mode requires openspec/specs/ in this repository"
+            )
+
+    files: list[tuple[str, bytes]] = []
+    capability_found = False
+
+    def walk_error(exc: OSError) -> None:
+        rel = os.path.relpath(exc.filename or baseline, root).replace(os.sep, "/")
+        raise OpenSpecError(f"cannot inspect OpenSpec baseline: {rel}") from exc
+
+    for directory, directories, names in os.walk(
+        baseline, topdown=True, followlinks=False, onerror=walk_error
+    ):
+        for name in directories:
+            path = os.path.join(directory, name)
+            rel = os.path.relpath(path, root).replace(os.sep, "/")
+            try:
+                mode = os.lstat(path).st_mode
+            except OSError as exc:
+                raise OpenSpecError(f"cannot inspect OpenSpec baseline: {rel}") from exc
+            if stat.S_ISLNK(mode):
+                raise OpenSpecError(f"symlink in OpenSpec baseline: {rel}")
+            if not stat.S_ISDIR(mode):
+                raise OpenSpecError(f"non-directory in OpenSpec baseline: {rel}")
+        for name in names:
+            path = os.path.join(directory, name)
+            rel = os.path.relpath(path, root).replace(os.sep, "/")
+            try:
+                mode = os.lstat(path).st_mode
+            except OSError as exc:
+                raise OpenSpecError(f"cannot inspect OpenSpec baseline: {rel}") from exc
+            if stat.S_ISLNK(mode):
+                raise OpenSpecError(f"symlink in OpenSpec baseline: {rel}")
+            if not stat.S_ISREG(mode):
+                raise OpenSpecError(f"non-regular file in OpenSpec baseline: {rel}")
+            try:
+                with open(path, "rb") as fh:
+                    content = fh.read()
+            except OSError as exc:
+                raise OpenSpecError(f"unreadable OpenSpec baseline: {rel}") from exc
+            relative = os.path.relpath(path, baseline)
+            if len(relative.split(os.sep)) == 2 and os.path.basename(path) == "spec.md":
+                try:
+                    content.decode("utf-8")
+                except UnicodeDecodeError as exc:
+                    raise OpenSpecError(f"unreadable OpenSpec baseline: {rel}") from exc
+                capability_found = True
+            files.append((rel, hashlib.sha256(content).digest()))
+
+    if not capability_found:
+        raise OpenSpecError("openspec/specs/ has no capability spec.md files")
+
+    digest = hashlib.sha256()
+    for rel, content_digest in sorted(files):
+        digest.update(rel.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(content_digest)
+    return digest.hexdigest()
+
+
 def opted_in(root: str) -> bool:
     """Only an explicit project setting activates the bridge."""
     try:

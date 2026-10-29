@@ -19,20 +19,58 @@ move at different speeds. So the promise is specific:
 
 ---
 
+## [0.60.6] - 2026-10-28
+
+### Fixed — standalone fork preview
+
+- Release a completed direct baseline only after its exact ordered history is
+  journalled, not merely a matching record count. Refuse padded or reordered
+  closing records without extending the journal.
+- Integrate the baseline and V2 controls without deleting existing checks or
+  faults. Pinned totals are 681 checks and 807 faults; this is not an upstream release.
+
 ## [0.60.5] - 2026-10-28
 
-### Fixed
+### Fixed — standalone fork preview
 
 - Restrict OpenCode V2 packaged-skill transforms to package-owned assets. Native
   global and drop-in skill discovery remains authoritative, and an existing
   native skill ID is never overwritten.
 
+## [0.60.4] - 2026-10-28
+
+### Fixed — standalone fork preview
+
+- Bind active direct tickets to their canonical journal entry, not mutable entry
+  identity. A restamped state cannot replace the baseline that post validation
+  already blessed.
+- Preserve that binding across a same-ticket pause/resume, reject baseline drift
+  in both the helper and post path, and keep completed ticket IDs available for
+  a later fully new direct run. Pinned totals are 678 checks and 803 faults.
+
 ## [0.60.3] - 2026-10-28
 
-### Fixed
+### Fixed — standalone fork preview
 
 - Register packaged OpenCode skills through the V2 skill transform in plugin-only
   installs while preserving native drop-in skill discovery and its overrides.
+- Release a direct ticket's baseline binding after its IDLE closeout is fully
+  journalled. Keep active tickets and unverified closing edges bound, without
+  blocking later baseline updates on behalf of a completed ticket.
+- Document the direct-entry fingerprint in the state schema. Add a positive
+  closeout installer check and mutation; pinned totals are 676 checks and 801 faults.
+
+## [0.60.2] - 2026-10-28
+
+### Fixed — standalone fork preview
+
+- Refuse writes to the existing OpenSpec baseline during a direct ticket's CODE
+  and CLOSEOUT, including parent paths and symlink escapes. Bind a direct ticket
+  to the baseline's content and stop it if that tree later drifts, including
+  through shell writes. Keep implementation writes and other tiers unchanged;
+  add no new spec receipt or baseline-validity claim.
+- Add a baseline-drift installer check and three mutations. The pinned totals
+  grow to 675 checks and 800 faults.
 
 ## [0.60.1] - 2026-10-28
 

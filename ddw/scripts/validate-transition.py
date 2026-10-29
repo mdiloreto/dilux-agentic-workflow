@@ -911,6 +911,130 @@ def _check_gate_owner(old_state, new_state, graph, appended):
         )
 
 
+_BASELINE_DIGEST = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _is_direct_entry(entry, ticket):
+    return (
+        isinstance(entry, dict)
+        and entry.get("from") == CLASSIFY
+        and entry.get("to") == "CODE"
+        and entry.get("tier") == "OPENSPEC-DIRECT"
+        and entry.get("ticket") == ticket
+    )
+
+
+def _direct_entry_for_ticket(history, ticket, phase):
+    """Find this ticket's entry, following its own pauses but not a closeout."""
+    for entry in reversed(history):
+        if not isinstance(entry, dict) or entry.get("ticket") != ticket:
+            continue
+        if _is_direct_entry(entry, ticket):
+            return entry
+        if entry.get("to") == IDLE and not _is_pause(entry) and phase != IDLE:
+            return None
+    return None
+
+
+def _canonical_journal_entries(history, state_path):
+    """Match journal records to their exact, ordered history prefix."""
+    entries = [
+        entry for entry in _journal_lines(state_path)
+        if isinstance(entry, dict) and "from" in entry and "to" in entry
+    ]
+    out, index = [], 0
+    for recorded in entries:
+        if index < len(history) and recorded == history[index]:
+            out.append(recorded)
+            index += 1
+        elif recorded in out:
+            continue
+        else:
+            raise Block(
+                "OpenSpec direct baseline binding no longer matches its journalled history. Its "
+                "entry was missing, moved, or restamped; restore the canonical state before "
+                "advancing or closing this ticket. Stop and ask for a separate requirements change."
+            )
+    return out
+
+
+def _check_direct_journal_binding(history, entry, ticket, state_path):
+    """Require a blessed direct entry to remain the journal's exact record."""
+    recorded = _canonical_journal_entries(history, state_path)
+    if not recorded:
+        return
+    position = next((i for i, candidate in enumerate(history) if candidate is entry), None)
+    if position is None or position < len(recorded):
+        return
+    for index, earlier in enumerate(recorded):
+        if not _is_direct_entry(earlier, ticket):
+            continue
+        if not any(
+            closed.get("ticket") == ticket
+            and closed.get("to") == IDLE
+            and not _is_pause(closed)
+            for closed in recorded[index + 1:]
+            if isinstance(closed, dict)
+        ):
+            raise Block(
+                "OpenSpec direct baseline binding is already active for this paused ticket. Resume "
+                "it with its original journalled entry; do not reuse the ticket ID to bind a new "
+                "baseline."
+            )
+
+
+def _check_direct_baseline_binding(old_state, new_state, appended, state_path):
+    """Keep a direct ticket bound to the exact baseline it entered with."""
+    tier = new_state.get("tier") or old_state.get("tier")
+    if tier != "OPENSPEC-DIRECT" or not state_path:
+        return
+
+    history = list(old_state.get("history") or []) + list(appended)
+    if old_state.get("phase", IDLE) == IDLE and new_state.get("phase", IDLE) == IDLE:
+        canonical = _canonical_journal_entries(history, state_path)
+        if len(history) == len(canonical):
+            return  # A verified closing edge releases the input baseline for later work.
+    root = os.path.dirname(os.path.abspath(state_path))
+    if not openspec_bridge.opted_in(root):
+        raise Block("OpenSpec direct mode requires AGENTS.md § Specification framework "
+                    "with Spec format: OpenSpec")
+
+    ticket = new_state.get("ticket") or old_state.get("ticket")
+    if not isinstance(ticket, str):
+        ticket = next(
+            (recorded.get("ticket") for recorded in reversed(history)
+             if isinstance(recorded, dict) and isinstance(recorded.get("ticket"), str)),
+            None,
+        )
+    entry = _direct_entry_for_ticket(history, ticket, new_state.get("phase", IDLE))
+    if entry is None:
+        raise Block(
+            "OpenSpec direct baseline binding is missing from this active ticket. It cannot prove "
+            "that the requirements stayed fixed after entry. Stop and ask for a separate "
+            "requirements change; do not advance or close this ticket."
+        )
+    _check_direct_journal_binding(history, entry, ticket, state_path)
+    try:
+        actual = openspec_bridge.baseline_digest(root)
+    except openspec_bridge.OpenSpecError as exc:
+        raise Block(
+            "OpenSpec direct baseline cannot be verified: %s. Stop and ask for a separate "
+            "requirements change; do not advance or close this ticket." % exc
+        ) from exc
+    expected = entry.get("baseline_digest")
+    if not isinstance(expected, str) or not _BASELINE_DIGEST.fullmatch(expected):
+        raise Block(
+            "OpenSpec direct baseline binding is missing from this active ticket. It cannot prove "
+            "that the requirements stayed fixed after entry. Stop and ask for a separate "
+            "requirements change; do not advance or close this ticket."
+        )
+    if actual != expected:
+        raise Block(
+            "OpenSpec direct baseline changed after this ticket entered CODE. Stop and ask for a "
+            "separate requirements change; do not advance or close this ticket."
+        )
+
+
 def validate(old_state, new_state, graph, tool_name=None, max_appended=1,
              gates_scope="all", skip_edges=0, state_path=None):
     old_h, new_h = _check_append_only(old_state, new_state)
@@ -934,6 +1058,7 @@ def validate(old_state, new_state, graph, tool_name=None, max_appended=1,
     # claimed, so the phase it is claimed from has to be judged here or nowhere.
     _check_gate_owner(old_state, new_state, graph, appended)
     _check_gates_have_a_ticket(new_state)
+    _check_direct_baseline_binding(old_state, new_state, appended, state_path)
 
     old_phase = old_state.get("phase", IDLE)
     new_phase = new_state.get("phase", IDLE)
@@ -1199,34 +1324,6 @@ def validate(old_state, new_state, graph, tool_name=None, max_appended=1,
             continue
         if not isinstance(edge_cfg, dict):
             raise Block(f"malformed graph: the value of {key!r} is not an object")
-        if tier == "OPENSPEC-DIRECT" and key == "CLASSIFY->CODE" and idx >= skip_edges:
-            if not state_path:
-                raise Block("OpenSpec direct mode needs the repository state path")
-            root = os.path.dirname(os.path.abspath(state_path))
-            if not openspec_bridge.opted_in(root):
-                raise Block("OpenSpec direct mode requires AGENTS.md § Specification framework "
-                            "with Spec format: OpenSpec")
-            baseline = os.path.join(root, "openspec", "specs")
-            if (os.path.islink(os.path.join(root, "openspec")) or os.path.islink(baseline)
-                    or not os.path.isdir(baseline)):
-                raise Block("OpenSpec direct mode requires openspec/specs/ in this repository")
-            found = False
-            for directory, dirs, files in os.walk(baseline, followlinks=False):
-                for name in dirs + files:
-                    if os.path.islink(os.path.join(directory, name)):
-                        raise Block("symlink in openspec/specs/: " + name)
-                if os.path.dirname(directory) == baseline and "spec.md" in files:
-                    spec_file = os.path.join(directory, "spec.md")
-                    try:
-                        if not os.path.isfile(spec_file):
-                            raise OSError("not a regular file")
-                        with open(spec_file, encoding="utf-8") as fh:
-                            fh.read()
-                    except (OSError, UnicodeError) as exc:
-                        raise Block("unreadable OpenSpec baseline: " + spec_file) from exc
-                    found = True
-            if not found:
-                raise Block("openspec/specs/ has no capability spec.md files")
         gates_required = edge_cfg.get("gates", [])
         if not isinstance(gates_required, list):
             raise Block(f"malformed graph: the gates of {key!r} are not a list")
@@ -1722,6 +1819,11 @@ def sealed_artifact_denied(target, root, state):
     gates = state.get("gates") or {}
     rel = os.path.relpath(target, root).replace(os.sep, "/")
     phase = state.get("phase", IDLE)
+    if (state.get("tier") == "OPENSPEC-DIRECT" and phase in ("CODE", "CLOSEOUT")
+            and (rel in ("openspec", "openspec/specs") or rel.startswith("openspec/specs/"))):
+        return (f"`{rel}` is part of the existing OpenSpec baseline, which is read-only input "
+                "for this direct ticket. Implement its requirements without rewriting them. "
+                "If they need to change, stop and ask for a separate requirements change.")
     for gate, owner, template in SEALED_BY_GATE:
         if not gates.get(gate):
             continue                                 # not earned yet — this is where it is written
@@ -2898,6 +3000,10 @@ def decide_pre(state_path, graph_path, tool_name, tool_input, paths, repo=None, 
             reason = enforcement_write_denied(lexical, root)
             if reason:
                 return reason
+            if disk.get("tier") == "OPENSPEC-DIRECT":
+                reason = sealed_artifact_denied(lexical, root, disk)
+                if reason:
+                    return reason
         reason = source_write_denied(target, root, phase)
         if reason:
             return reason
