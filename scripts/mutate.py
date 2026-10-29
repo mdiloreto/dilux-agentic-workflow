@@ -3703,6 +3703,27 @@ MUTATIONS = [
      edit("ddw/rules/transition-graph.json",
           '"gates": ["tests", "sast"]',
           '"gates": ["tests"]')),
+    ("OpenSpec planning documents are rejected in opted-in PLAN again",
+     edit("ddw/scripts/validate-transition.py",
+          '    if phase == "PLAN" and openspec_bridge.is_plan_artifact(root, rel):',
+          '    if False and openspec_bridge.is_plan_artifact(root, rel):')),
+    ("OpenSpec planning documents bypass the project opt-in",
+     edit("ddw/scripts/openspec_bridge.py",
+          '    return bool(_PLAN_ARTIFACT.fullmatch(rel)) and opted_in(root)',
+          '    return bool(_PLAN_ARTIFACT.fullmatch(rel))')),
+    ("OpenSpec planning documents are allowed outside PLAN",
+     edit("ddw/scripts/validate-transition.py",
+          '    if phase == "PLAN" and openspec_bridge.is_plan_artifact(root, rel):',
+          '    if openspec_bridge.is_plan_artifact(root, rel):')),
+    ("untracked OpenSpec planning documents hide source or trigger false notices",
+     edit("ddw/scripts/validate-transition.py",
+          '["git", "-C", repo, "status", "--porcelain", "--untracked-files=all"]',
+          '["git", "-C", repo, "status", "--porcelain"]')),
+    ("a hard-linked OpenSpec planning document can change product source",
+     edit("ddw/scripts/validate-transition.py",
+          '        if links != 1:\n'
+          '            return f"`{rel}` has multiple hard links; refusing the write during PLAN"\n',
+          "")),
 ]
 
 

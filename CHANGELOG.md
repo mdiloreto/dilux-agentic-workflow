@@ -19,6 +19,18 @@ move at different speeds. So the promise is specific:
 
 ---
 
+## [0.60.3] - 2026-10-28
+
+### Fixed
+
+- Allow only the OpenSpec proposal, design, tasks and capability deltas in
+  PLAN when the project explicitly opts in. Continue refusing product source,
+  baseline specifications, other phases, non-opted-in projects and hard-linked
+  documents that could change source through the allowed path.
+- Inspect individual untracked files when checking for unexpected source
+  changes, so planned OpenSpec documents do not conceal source or trigger a
+  misleading notice on their parent directory.
+
 ## [0.60.2] - 2026-10-27
 
 ### Fixed

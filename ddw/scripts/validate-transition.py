@@ -1560,6 +1560,16 @@ def source_write_denied(target, root, phase):
         return None
     if any(rel.startswith(pre) for pre in ALLOWED_DIR_PREFIXES):
         return None
+    if phase == "PLAN" and openspec_bridge.is_plan_artifact(root, rel):
+        try:
+            links = os.stat(target, follow_symlinks=False).st_nlink
+        except FileNotFoundError:
+            return None
+        except OSError:
+            return f"cannot inspect `{rel}` for hard links; refusing the write"
+        if links != 1:
+            return f"`{rel}` has multiple hard links; refusing the write during PLAN"
+        return None
 
     if phase == IDLE:
         # From IDLE there is no phase to finish and no ticket to finish it for,
@@ -3672,7 +3682,7 @@ def source_changed_in_no_source_phase(repo, phase):
     if phase not in NO_SOURCE_PHASES:
         return None
     try:
-        out = subprocess.run(["git", "-C", repo, "status", "--porcelain"],
+        out = subprocess.run(["git", "-C", repo, "status", "--porcelain", "--untracked-files=all"],
                              capture_output=True, text=True, timeout=10)
     except (OSError, subprocess.SubprocessError):
         return None                      # no git, or it is not answering: not ours to guess
@@ -3690,10 +3700,7 @@ def source_changed_in_no_source_phase(repo, phase):
         path = path.strip().strip('"')
         if not path or path.rstrip("/").split("/", 1)[0] in _NOT_PRODUCT:
             continue
-        # git reports an untracked DIRECTORY as `docs/`, with the slash. Resolved
-        # to a path it becomes `docs`, which does not start with `docs/` — so the
-        # allowlist missed it and every artifact directory read as product source.
-        # Probing the directory itself keeps the prefix intact.
+        # Keep the prefix intact for entries Git still reports as directories.
         probe = path if path.endswith("/") else path
         target = resolve_in_repo(probe.rstrip("/") + ("/x" if path.endswith("/") else ""), root)
         if target and source_write_denied(target, root, phase):
