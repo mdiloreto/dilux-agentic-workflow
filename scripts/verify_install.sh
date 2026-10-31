@@ -40,7 +40,7 @@ EXPECT_ADAPTERS=6
 # `--check-anchors`, `--cover` and every check in this file green, and the
 # published percentage went on being a percentage of a smaller list. The same
 # reason `EXPECT_CHECKS` exists, one file over.
-EXPECT_MUTATIONS=814
+EXPECT_MUTATIONS=815
 
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # EXPORTED, because the Python blocks below anchor their own temporary
@@ -11607,8 +11607,11 @@ _past_end = "%d/%d" % (len(_mut.MUTATIONS) + 1, len(_mut.MUTATIONS) + 1)
 # the shape this repository already named as not an answer: the coverage number
 # CI publishes was unobtainable, on the pull request that carried the growth,
 # and every check on the branch was green. The budget below is measured, not
-# guessed: a suite run costs about ninety seconds on a GitHub runner, and two
-# minutes is that with room. A shard also pays for one unmutated baseline.
+# guessed: measured at 814 faults, twenty-four complete kill-map shards had a
+# 70-minute median and two reached the 75-minute ceiling. That is about two minutes per
+# suite run; two and a half keeps enough room for runner variation and artifact
+# upload. The fast mutation path keeps its existing two-minute budget because it
+# stops at the first failing layer. A shard also pays for one unmutated baseline.
 import math
 import yaml
 _wf = yaml.safe_load(open(os.path.join(src, ".github/workflows/mutations.yml"), encoding="utf-8"))
@@ -11627,11 +11630,15 @@ for _name, _job in sorted(_sharded.items()):
     _shards = len(_job["strategy"]["matrix"]["shard"])
     _ceiling = int(_job["timeout-minutes"])
     _per_shard = math.ceil(len(_mut.MUTATIONS) / _shards) + 1
-    assert _per_shard * 2 < _ceiling, (
+    _no_fast = any("--no-fast" in (step.get("run") or "")
+                   for step in _job.get("steps", []))
+    _minutes_per_run = 2.5 if _no_fast else 2
+    _estimated_minutes = _per_shard * _minutes_per_run
+    assert _estimated_minutes < _ceiling, (
         "in `%s`, a shard runs %d suite runs (%d faults over %d shards, plus the baseline), "
-        "which is about %d minutes against a timeout of %d. It will be killed and reported as "
+        "which is about %.1f minutes against a timeout of %d. It will be killed and reported as "
         "cancelled. Add shards — never fewer faults." % (_name, _per_shard, len(_mut.MUTATIONS),
-                                                         _shards, _per_shard * 2, _ceiling))
+                                                         _shards, _estimated_minutes, _ceiling))
 
 # And no job that measures the list may be conditional. `--cover` already refuses
 # a conditional `mutations` job — a job that does not run is not coverage — and

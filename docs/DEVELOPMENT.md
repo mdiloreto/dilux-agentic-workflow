@@ -341,23 +341,27 @@ CI runs the version checker on pull requests and pushes.
 `.github/workflows/mutations.yml` is separate because it is slow by nature — one
 full run of the suite per injected fault. In one process that does not finish
 inside any timeout worth setting, and a job killed at its timeout reports
-*cancelled*, which is not an answer to the question it was asked. So it runs in
-twenty-four slices, `mutate.py --shard I/24`, one job each. Measured: they start within seconds of
-each other and the slowest finishes in about fourteen minutes, so a pull request waits for one shard
-and not for twenty-four. (A job that has not finished reports as *pending* whether it is running or
-waiting for a runner — the two are indistinguishable in the checks list, and the only way to tell
-them apart is to compare each job's `startedAt` against the run's creation.)
+*cancelled*, which is not an answer to the question it was asked. The fast
+kill-rate measurement runs in twenty-four slices, `mutate.py --shard I/24`.
+The complete no-fast kill map runs in thirty-two, `mutate.py --shard I/32`:
+measured at 814 faults, the old twenty-four-way run had a 70-minute median and
+two jobs were cancelled at the 75-minute ceiling. (A job that has not finished reports
+as *pending* whether it is running or waiting for a runner — the two are
+indistinguishable in the checks list, and the only way to tell them apart is to
+compare each job's `startedAt` against the run's creation.)
 
-**The slice count lives in three places and only two of them are checked.** The
+**Each slice count lives in three places and only two of them are checked.** The
 matrix and the `--shard I/N` argument are tied together by `mutate.py --cover`,
 and `verify_install.sh` does the arithmetic that keeps a slice under the job's
 timeout — a faults-per-shard figure that grew past the ceiling once, killing
 three runs at exactly 45:00 while every check on the branch stayed green. The
-third place is `main`'s branch protection, which lists the required checks BY
-NAME: rename the shards and the required contexts never appear again, so the
-pull request is blocked forever with everything passing. Nothing in this
-repository can read that list — it is GitHub's, not the tree's. **Re-sharding is
-two commits and one API call**, and the call is the one nobody remembers:
+third place is `main`'s branch protection, when configured, which lists the
+required checks BY NAME: rename the shards and the required contexts never
+appear again, so the pull request is blocked forever with everything passing.
+Nothing in this repository can read that list — it is GitHub's, not the tree's.
+**Re-sharding a
+protected branch is two commits and one API call**, and the call is the one
+nobody remembers:
 
 ```bash
 gh api -X PATCH repos/<owner>/<repo>/branches/main/protection/required_status_checks \

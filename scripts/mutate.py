@@ -3530,17 +3530,30 @@ MUTATIONS = [
           '  echo "  DDW: $TARGET"')),
     ("the kill map goes back to running only when somebody asks for it",
      edit(".github/workflows/mutations.yml",
-          "    name: which checks can never fail? (shard ${{ matrix.shard }}/24)\n"
+          "    name: which checks can never fail? (shard ${{ matrix.shard }}/32)\n"
           "    needs: anchors",
-          "    name: which checks can never fail? (shard ${{ matrix.shard }}/24)\n"
+          "    name: which checks can never fail? (shard ${{ matrix.shard }}/32)\n"
           "    if: github.event_name == 'workflow_dispatch'\n"
           "    needs: anchors")),
     ("the kill map's shard goes back to a ceiling it does not fit under",
      edit(".github/workflows/mutations.yml",
-          "    # job and of no other. The slowest shard took 38.\n"
+          "    # headroom instead of turning a timeout into an ever-moving target.\n"
           "    timeout-minutes: 75",
-          "    # job and of no other. The slowest shard took 38.\n"
+          "    # headroom instead of turning a timeout into an ever-moving target.\n"
           "    timeout-minutes: 45")),
+    ("the complete kill map returns to too few shards for its timeout",
+     multi(
+         edit(".github/workflows/mutations.yml",
+              "    name: which checks can never fail? (shard ${{ matrix.shard }}/32)",
+              "    name: which checks can never fail? (shard ${{ matrix.shard }}/24)"),
+         edit(".github/workflows/mutations.yml",
+              "        shard: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,\n"
+              "                17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32]",
+              "        shard: [1,2,3,4,5,6,7,8,9,10,11,12,\n"
+              "                13,14,15,16,17,18,19,20,21,22,23,24]"),
+         edit(".github/workflows/mutations.yml",
+              "          python3 scripts/mutate.py --shard ${{ matrix.shard }}/32 --no-fast \\",
+              "          python3 scripts/mutate.py --shard ${{ matrix.shard }}/24 --no-fast \\"))),
     ("the installer pasted from a URL goes back to not finding itself",
      edit("install.sh",
           'if ! { [ -f "$SELF/.claude-plugin/plugin.json" ]',

@@ -30,6 +30,8 @@ move at different speeds. So the promise is specific:
   the orchestrator and active phase rules, without depending on a `Write` tool.
 - Keep product source, archived changes, symlink aliases and hard-linked files
   sealed while correctly auditing every untracked planning file.
+- Split the complete mutation kill map into 32 shards after the 24-way layout
+  reached the CI timeout, while retaining all 815 faults and the 75-minute cap.
 
 ## [0.60.8] - 2026-10-28
 
