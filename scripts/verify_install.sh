@@ -30,7 +30,7 @@ set -uo pipefail
 # a knob anyone could turn from outside the file. `docs/AI-POLICY.md` and
 # `CONTRIBUTING.md` both name this variable as the thing not to soften; it was
 # softenable without editing the file they were talking about.
-EXPECT_CHECKS=671
+EXPECT_CHECKS=681
 EXPECT_SKILLS=20
 EXPECT_AGENTS=5
 EXPECT_RULES=14
@@ -40,7 +40,7 @@ EXPECT_ADAPTERS=6
 # `--check-anchors`, `--cover` and every check in this file green, and the
 # published percentage went on being a percentage of a smaller list. The same
 # reason `EXPECT_CHECKS` exists, one file over.
-EXPECT_MUTATIONS=785
+EXPECT_MUTATIONS=815
 
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # EXPORTED, because the Python blocks below anchor their own temporary
@@ -735,7 +735,15 @@ PYTIERS
 # that never reach the total this file pins.
 for PAIR in $TIER_DESTS; do
   TIER="${PAIR%%:*}"; DEST="${PAIR##*:}"
-  python3 "$TR" --to CLASSIFY --action req --ticket T-1 --graph "$G" > "$R/.ddw-state.json" 2>/dev/null
+  ST="$R/.ddw-state.json"
+  if [ "$TIER" = "OPENSPEC-DIRECT" ]; then
+    D="$R/direct-baseline"
+    mkdir -p "$D/openspec/specs/payments"
+    printf '## Specification framework\nSpec format: OpenSpec\n' > "$D/AGENTS.md"
+    printf '# Payments\n' > "$D/openspec/specs/payments/spec.md"
+    ST="$D/.ddw-state.json"
+  fi
+  python3 "$TR" --to CLASSIFY --action req --ticket T-1 --graph "$G" --state "$ST" > "$ST" 2>/dev/null
   # FREE is the one tier whose edge costs the user's own words, quoted. Every
   # other tier takes any action at all, and that asymmetry is the point: the
   # loop would pass just as well with `free: "…"` everywhere, and then nothing
@@ -743,7 +751,9 @@ for PAIR in $TIER_DESTS; do
   # has to ask for.
   CACT=c
   [ "$TIER" = "FREE" ] && CACT='free: "hacelo sin pipeline, me hago cargo"'
-  if python3 "$TR" --to "$DEST" --action "$CACT" --tier "$TIER" --title "the fixture ticket" --graph "$G" >/dev/null 2>&1; then
+  TIER_ARGS=(--tier "$TIER")
+  [ "$TIER" = "OPENSPEC-DIRECT" ] && TIER_ARGS=(--direct-openspec)
+  if python3 "$TR" --to "$DEST" --action "$CACT" "${TIER_ARGS[@]}" --title "the fixture ticket" --graph "$G" --state "$ST" >/dev/null 2>&1; then
     ok "tier $TIER: CLASSIFY->$DEST accepted"
   else
     bad "tier $TIER: CLASSIFY->$DEST REJECTED"
@@ -3320,10 +3330,15 @@ cpg 'git add x && git commit -m "test: probe"' \
   && bad "a Copilot commit with -m sailed through — the message never had to come from the shown file" \
   || ok "Copilot's preToolUse holds a commit to the shown file (-F), the part of the gate that needs no seal"
 
-printf 'x feat: y\n\nRefs: F-1\nAI-assisted: yes\n' > "$CPG/.ddw-work/commit-message.txt"
+printf 'x feat: y\n\nRefs: F-1\n' > "$CPG/.ddw-work/commit-message.txt"
 cpg 'git commit -F .ddw-work/commit-message.txt' \
   && ok "and allows the sanctioned form with a clean proposal — partial is not closed" \
   || bad "the partial gate refuses the exact flow the skill teaches, which pushes models around it"
+
+printf 'feat(test): optional metadata\n\nCo-authored-by: Example Contributor <contributor@example.com>\n' > "$CPG/.ddw-work/commit-message.txt"
+cpg 'git commit -F .ddw-work/commit-message.txt' \
+  && ok "Copilot accepts optional coauthor metadata without requiring AI disclosure" \
+  || bad "Copilot's partial commit gate requires AI disclosure for optional metadata"
 
 printf '{"tier": "FEATURE", "phase": "CODE", "ticket": "F-1", "autonomy": "minimal", "gates": {}, "history": []}' > "$CPG/.ddw-state.json"
 cpg 'gh pr merge 2 --squash' \
@@ -5626,23 +5641,14 @@ echo '{}' | python3 "$SELF/ddw/scripts/validate-transition.py" --mode post \
   && ok "while a graph written before the field existed keeps working" \
   || bad "graphs with no format_version are refused — that is every repo that installed DDW earlier"
 
-# ── The commit convention, applied to the repository that publishes it ────────
-#
-# DDW requires `AI-assisted: yes` or `AI-full: yes` on every commit made with a
-# model, and forbids Co-Authored-By by name — authorship is where responsibility
-# sits, and a trailer naming the tool as an author spreads it onto something that
-# cannot hold it. That rule governed every repo DDW is installed in and nothing
-# here. Driven against real commits, because a checker for git history that is
-# never handed any is a checker of nothing.
-section "The attribution rule holds in this repository too"
+section "Version and fork-policy guarantees"
 
 # ── The version moves when what people install moves ──────────────────────────
 #
 # `--since` is the half of check_versions.py that makes the number mean
 # something, and nothing drove it: the suite called the script without a range,
 # so the rule existed and was never once exercised. A synthetic repo is what
-# gives it commits to have an opinion about — same reason check_commits.py has
-# one below.
+# gives it commits to have an opinion about.
 VB="$WORK/version-bump"; mkdir -p "$VB"
 git -C "$VB" init -q -b main .
 git -C "$VB" config user.email ddw@test; git -C "$VB" config user.name ddw
@@ -5750,7 +5756,7 @@ python3 "$SELF/scripts/check_versions.py" --repo "$VB" >/dev/null 2>&1 \
 
 # CI has to run the ranged form on a PUSH too. This repository's own work lands
 # straight on main, so a rule that only applies to pull requests is a rule it
-# exempts itself from — the shape the commit-attribution check was written for.
+# exempts itself from.
 python3 - "$SELF" <<'PYVBCI' && ok "and CI applies the rule to pushes, not only to pull requests" || bad "the version rule runs on pull requests alone, and this repo pushes to main"
 import re, sys, os
 y = open(os.path.join(sys.argv[1], ".github/workflows/verify.yml"), encoding="utf-8").read()
@@ -5762,103 +5768,291 @@ assert "HEAD~1" in body, ("the step only uses --since on pull_request; a push la
                           "range and the rule does not apply to this repo's own commits")
 PYVBCI
 
-CM="$WORK/commits"; mkdir -p "$CM"
-git -C "$CM" init -q -b main .
-git -C "$CM" config user.email ddw@test; git -C "$CM" config user.name ddw
-git -C "$CM" config commit.gpgsign false
-echo one > "$CM/a.txt"; git -C "$CM" add -A
-git -C "$CM" commit -q -m "base, before the range"
-CM_BASE="$(git -C "$CM" rev-parse HEAD)"
+[ ! -e "$SELF/scripts/check_commits.py" ] \
+  && ok "the fork retires the mandatory attribution checker" \
+  || bad "the retired attribution checker is shipped again"
 
-echo two > "$CM/a.txt"; git -C "$CM" add -A
-git -C "$CM" commit -q -F - <<'CMEOF'
-✨ a change that discloses how it was made
+python3 - "$SELF" <<'PYFORKCOMMITS' && ok "commit rules require no AI metadata" || bad "commit rules reintroduce mandatory AI metadata"
+import os, sys
+text = open(os.path.join(sys.argv[1], "ddw/rules/commits.instructions.md"), encoding="utf-8").read()
+assert "This fork requires no AI-specific trailers, PR labels or attribution sections." in text
+assert "AI-assisted:" not in text and "AI-full:" not in text
+PYFORKCOMMITS
 
-AI-assisted: yes
-CMEOF
-python3 "$SELF/scripts/check_commits.py" --repo "$CM" --since "$CM_BASE" >/dev/null 2>&1 \
-  && ok "an attributed commit passes" \
-  || bad "the attribution check rejects a commit that carries the trailer it asks for"
+python3 - "$SELF" <<'PYFORKPRLABEL' && ok "the PR command needs no AI label" || bad "the PR skill creates a mandatory AI label"
+import os, sys
+text = open(os.path.join(sys.argv[1], "skills/ddw-create-pr/SKILL.md"), encoding="utf-8").read()
+assert "gh pr create --body-file" in text
+assert "--label" not in text and "gh label create" not in text
+PYFORKPRLABEL
 
-# Carries the right trailer AND the forbidden one, which is the realistic shape:
-# the harness appends Co-Authored-By by default and the author adds the
-# disclosure. Testing it without `AI-assisted` would pass for the other reason —
-# no attribution at all — and the Co-Authored-By rule would go unmeasured.
-echo three > "$CM/a.txt"; git -C "$CM" add -A
-git -C "$CM" commit -q -F - <<'CMEOF'
-✨ a change that discloses the help and still names the tool as an author
+python3 - "$SELF" <<'PYFORKPRBODY' && ok "the PR template needs no attribution section" || bad "the PR template requires AI attribution"
+import os, sys
+text = open(os.path.join(sys.argv[1], "skills/ddw-create-pr/SKILL.md"), encoding="utf-8").read()
+assert "## Attribution" not in text
+assert "AI-assisted" not in text and "AI-full" not in text
+PYFORKPRBODY
 
-AI-assisted: yes
-Co-Authored-By: Some Model <noreply@example.com>
-CMEOF
-python3 "$SELF/scripts/check_commits.py" --repo "$CM" --since "$CM_BASE" >/dev/null 2>&1 \
-  && bad "Co-Authored-By passes — the tool is credited as an author and nothing objects" \
-  || ok "and a Co-Authored-By trailer is refused, by the rule DDW ships to everyone else"
+python3 - "$SELF" <<'PYFORKDISCOVERY' && ok "discovery uses the same optional-metadata policy" || bad "discovery reintroduces an AI label"
+import os, sys
+text = open(os.path.join(sys.argv[1], "ddw/rules/discovery.instructions.md"), encoding="utf-8").read()
+assert "No AI-specific label is required." in text
+assert "AI-assisted" not in text and "AI-full" not in text
+PYFORKDISCOVERY
 
-git -C "$CM" reset -q --hard HEAD~1
-echo four > "$CM/a.txt"; git -C "$CM" add -A
-git -C "$CM" commit -q -m "✨ a change that discloses nothing at all"
-python3 "$SELF/scripts/check_commits.py" --repo "$CM" --since "$CM_BASE" >/dev/null 2>&1 \
-  && bad "a commit with no attribution trailer at all passes" \
-  || ok "and so is a commit that discloses nothing"
+python3 - "$SELF" <<'PYFORKTRACKER' && ok "tracker comments keep evidence without an AI footer" || bad "tracker comments require an AI footer"
+import os, sys
+text = open(os.path.join(sys.argv[1], "ddw/rules/tracker.instructions.md"), encoding="utf-8").read()
+assert "E2E evidence:" in text and "Tests:" in text
+assert "AI-assisted" not in text and "AI-full" not in text
+PYFORKTRACKER
 
-# A range git cannot read is not a range that passed. This is what a shallow
-# clone produces, and reporting it as success is how the check disappears.
-python3 "$SELF/scripts/check_commits.py" --repo "$CM" --since "no-such-ref" >/dev/null 2>&1 \
-  && bad "an unreadable range reports success — the check silently did not run" \
-  || ok "and an unreadable range is a failure, not a pass"
+python3 - "$SELF" <<'PYFORKCIPOLICY' && ok "fork CI does not run the retired checker" || bad "fork CI invokes the retired attribution checker"
+import os, sys
+text = open(os.path.join(sys.argv[1], ".github/workflows/verify.yml"), encoding="utf-8").read()
+assert "check_commits.py" not in text
+PYFORKCIPOLICY
 
-# Dependabot opens a pull request every week and signs nothing: the rule asks a
-# person whether a model helped, and there is no person here. Without this the
-# dependency PRs are red on arrival, every one of them, and a rule that is red
-# for a reason nobody can act on is a rule people learn to click past.
-git -C "$CM" reset -q --hard HEAD~1
-echo bumped > "$CM/a.txt"; git -C "$CM" add -A
-git -C "$CM" -c user.name='dependabot[bot]' \
-    -c user.email='49699333+dependabot[bot]@users.noreply.github.com' \
-    commit -q -m "⬆️ chore(ci): bump actions/checkout from 7.0.0 to 7.0.1"
-CM_BOT="$(python3 "$SELF/scripts/check_commits.py" --repo "$CM" --since "$CM_BASE" 2>&1)" \
-  && ok "a bot's dependency bump is not asked to disclose help nobody gave it" \
-  || bad "the attribution check rejects Dependabot, so every dependency PR lands red"
+python3 - "$SELF" <<'PYFORKAPPROVAL' && ok "optional metadata cannot grant or invalidate commit approval" || bad "metadata changes commit approval or requires disclosure"
+import json, os, subprocess, sys, tempfile
+src = sys.argv[1]
+gate = os.path.join(src, "ddw/scripts/hook-gate.py")
+graph = os.path.join(src, "ddw/rules/transition-graph.json")
+for metadata in ("", "Co-authored-by: Example Contributor <contributor@example.com>\n", "AI-assisted: yes\n"):
+    repo = tempfile.mkdtemp(dir=os.environ["WORK"])
+    state = os.path.join(repo, ".ddw-state.json")
+    with open(state, "w", encoding="utf-8") as fh:
+        json.dump({"phase": "DEFINE", "tier": "FEATURE", "ticket": "F-1",
+                   "autonomy": "assisted", "gates": {}, "history": []}, fh)
+    os.makedirs(os.path.join(repo, ".ddw-work"))
+    proposal = os.path.join(repo, ".ddw-work/commit-message.txt")
+    message = "feat(test): approved change\n\nRefs: F-1\n" + metadata
+    with open(proposal, "w", encoding="utf-8") as fh:
+        fh.write(message)
+    def run(mode):
+        event = {"tool_name": "Bash", "tool_input": {"command": "git commit -F .ddw-work/commit-message.txt"}}
+        return subprocess.run([sys.executable, gate, "--mode", mode, "--state", state,
+                               "--graph", graph, "--repo", repo], input=json.dumps(event),
+                              capture_output=True, text=True)
+    assert run("commit").returncode == 2, "metadata bypassed approval"
+    assert run("turn").returncode == 0
+    approved = run("commit")
+    assert approved.returncode == 0, approved.stdout + approved.stderr
+    with open(proposal, "a", encoding="utf-8") as fh:
+        fh.write("changed after approval\n")
+    assert run("commit").returncode == 2, "metadata bypassed the exact-message seal"
+PYFORKAPPROVAL
 
-# An exemption that does not say who it exempted is indistinguishable from a
-# check that stopped running. The count going down has to be visible.
-case "$CM_BOT" in
-  *"skipped"*"dependabot[bot]"*)
-    ok "and it names the commit it skipped instead of quietly subtracting it" ;;
-  *) bad "the bot commit vanishes from the count with nothing said about it" ;;
-esac
+python3 - "$SELF" <<'PYDIRECTBASELINE' && ok "a direct ticket keeps its baseline read-only while allowing implementation writes" || bad "a direct ticket rewrites its baseline or cannot write its implementation"
+import json, os, subprocess, sys, tempfile
+src = sys.argv[1]
+with tempfile.TemporaryDirectory(dir=os.environ["WORK"]) as repo:
+    state = os.path.join(repo, ".ddw-state.json")
+    with open(state, "w", encoding="utf-8") as fh:
+        json.dump({"phase": "CODE", "tier": "OPENSPEC-DIRECT", "ticket": "F-1",
+                   "gates": {}, "history": []}, fh)
+    command = [sys.executable, os.path.join(src, "ddw/scripts/hook-gate.py"), "--mode", "pre",
+               "--repo", repo, "--state", state, "--graph", os.path.join(src, "ddw/rules/transition-graph.json")]
+    for target, expected in (("openspec/specs/payments/spec.md", 2), ("src/payments.py", 0)):
+        event = {"tool_name": "Write", "tool_input": {"file_path": os.path.join(repo, target), "content": "changed"}}
+        result = subprocess.run(command, input=json.dumps(event), capture_output=True, text=True)
+        assert result.returncode == expected, result.stdout + result.stderr
+        if expected == 2:
+            assert "baseline" in (result.stdout + result.stderr).lower()
+PYDIRECTBASELINE
 
-# The exemption is for the bot, not for the shape of its message. A person who
-# forgets the trailer is still refused, in the same range, right after.
-echo human > "$CM/a.txt"; git -C "$CM" add -A
-git -C "$CM" commit -q -m "✨ a person's change, disclosing nothing"
-python3 "$SELF/scripts/check_commits.py" --repo "$CM" --since "$CM_BASE" >/dev/null 2>&1 \
-  && bad "one bot commit in the range excuses the humans in it too" \
-  || ok "and a person in the same range is still held to the rule"
-git -C "$CM" reset -q --hard HEAD~2
+python3 - "$SELF" <<'PYDIRECTBASELINEPOST' && ok "a direct ticket stops after its baseline drifts through a shell" || bad "a direct ticket blesses a shell-rewritten baseline"
+import json, os, subprocess, sys, tempfile
+src = sys.argv[1]
+sys.path.insert(0, os.path.join(src, "ddw", "scripts"))
+import openspec_bridge
+with tempfile.TemporaryDirectory(dir=os.environ["WORK"]) as repo:
+    with open(os.path.join(repo, "AGENTS.md"), "w", encoding="utf-8") as fh:
+        fh.write("## Specification framework\nSpec format: OpenSpec\n")
+    baseline = os.path.join(repo, "openspec", "specs", "payments", "spec.md")
+    os.makedirs(os.path.dirname(baseline))
+    with open(baseline, "w", encoding="utf-8") as fh:
+        fh.write("# Approved payments\n")
+    history = [
+        {"timestamp": "2026-08-06T10:00:00Z", "from": "IDLE", "to": "CLASSIFY",
+         "action": "classify", "tier": "OPENSPEC-DIRECT", "ticket": "F-1"},
+        {"timestamp": "2026-08-06T10:00:00Z", "from": "CLASSIFY", "to": "CODE",
+         "action": "existing baseline", "tier": "OPENSPEC-DIRECT", "ticket": "F-1",
+         "baseline_digest": openspec_bridge.baseline_digest(repo)},
+    ]
+    state = os.path.join(repo, ".ddw-state.json")
+    with open(state, "w", encoding="utf-8") as fh:
+        json.dump({"phase": "CODE", "tier": "OPENSPEC-DIRECT", "ticket": "F-1",
+                   "gates": {}, "history": history}, fh)
+    with open(os.path.join(repo, ".ddw-journal.jsonl"), "w", encoding="utf-8") as fh:
+        for item in history:
+            fh.write(json.dumps(item) + "\n")
+    with open(baseline, "w", encoding="utf-8") as fh:
+        fh.write("# Shell-rewritten payments\n")
+    result = subprocess.run(
+        [sys.executable, os.path.join(src, "ddw", "scripts", "hook-gate.py"), "--mode", "post",
+         "--repo", repo, "--state", state,
+         "--graph", os.path.join(src, "ddw", "rules", "transition-graph.json")],
+        capture_output=True, text=True)
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "baseline" in (result.stdout + result.stderr).lower()
+PYDIRECTBASELINEPOST
 
-# The commit a pull request is actually tested on is one GitHub fabricates —
-# `refs/pull/N/merge`, authored by GitHub, carrying no trailer, never landing in
-# anyone's history. Held to the rule, it fails every pull request forever, over a
-# commit nobody wrote. Found the first time this check ever ran on a real one.
-git -C "$CM" checkout -q -b cm-branch
-echo merged > "$CM/b.txt"; git -C "$CM" add -A
-git -C "$CM" commit -q -F - <<'CMEOF'
-✨ work on the branch
+python3 - "$SELF" <<'PYDIRECTBASELINEJOURNAL' && ok "a direct ticket cannot restamp its journalled baseline entry" || bad "a direct ticket can replace its journalled baseline binding"
+import json, os, subprocess, sys, tempfile
+src = sys.argv[1]
+sys.path.insert(0, os.path.join(src, "ddw", "scripts"))
+import openspec_bridge
+with tempfile.TemporaryDirectory(dir=os.environ["WORK"]) as repo:
+    open(os.path.join(repo, "AGENTS.md"), "w", encoding="utf-8").write(
+        "## Specification framework\nSpec format: OpenSpec\n")
+    baseline = os.path.join(repo, "openspec", "specs", "payments", "spec.md")
+    os.makedirs(os.path.dirname(baseline))
+    open(baseline, "w", encoding="utf-8").write("# Approved payments\n")
+    history = [
+        {"timestamp": "2026-08-06T10:00:00Z", "from": "IDLE", "to": "CLASSIFY",
+         "action": "classify", "tier": "OPENSPEC-DIRECT", "ticket": "F-1"},
+        {"timestamp": "2026-08-06T10:00:00Z", "from": "CLASSIFY", "to": "CODE",
+         "action": "bound entry", "tier": "OPENSPEC-DIRECT", "ticket": "F-1",
+         "baseline_digest": openspec_bridge.baseline_digest(repo)},
+    ]
+    state = os.path.join(repo, ".ddw-state.json")
+    json.dump({"phase": "CODE", "tier": "OPENSPEC-DIRECT", "ticket": "F-1",
+               "gates": {}, "history": history}, open(state, "w", encoding="utf-8"))
+    command = [sys.executable, os.path.join(src, "ddw/scripts/hook-gate.py"), "--mode", "post",
+               "--repo", repo, "--state", state,
+               "--graph", os.path.join(src, "ddw/rules/transition-graph.json")]
+    assert subprocess.run(command, capture_output=True, text=True).returncode == 0
+    journal_path = os.path.join(repo, ".ddw-journal.jsonl")
+    journal = open(journal_path, encoding="utf-8").read()
+    open(baseline, "w", encoding="utf-8").write("# Changed payments\n")
+    disk = json.load(open(state, encoding="utf-8"))
+    disk["history"][-1].update(timestamp="2026-08-06T11:00:00Z", action="restamped entry",
+                                baseline_digest=openspec_bridge.baseline_digest(repo))
+    json.dump(disk, open(state, "w", encoding="utf-8"))
+    result = subprocess.run(command, capture_output=True, text=True)
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "journal" in (result.stdout + result.stderr).lower()
+    assert open(journal_path, encoding="utf-8").read() == journal
+PYDIRECTBASELINEJOURNAL
 
-AI-assisted: yes
-CMEOF
-git -C "$CM" checkout -q main
-git -C "$CM" merge -q --no-ff cm-branch -m "Merge cm-branch into main" >/dev/null 2>&1
-python3 "$SELF/scripts/check_commits.py" --repo "$CM" --since "$CM_BASE" >/dev/null 2>&1 \
-  && ok "the merge commit a pull request is tested on is not held to a rule about authorship" \
-  || bad "every pull request fails on GitHub's own merge commit — a rule applied to a commit nobody wrote"
-git -C "$CM" reset -q --hard HEAD~2
+python3 - "$SELF" <<'PYDIRECTBASELINERESUME' && ok "a paused direct ticket keeps its own bound baseline on resume" || bad "a paused direct ticket loses or replaces its baseline binding"
+import json, os, subprocess, sys, tempfile
+src = sys.argv[1]
+sys.path.insert(0, os.path.join(src, "ddw", "scripts"))
+import openspec_bridge
+graph = os.path.join(src, "ddw/rules/transition-graph.json")
+gate = os.path.join(src, "ddw/scripts/hook-gate.py")
+transition = os.path.join(src, "ddw/scripts/transition.py")
+def setup():
+    repo = tempfile.mkdtemp(dir=os.environ["WORK"])
+    open(os.path.join(repo, "AGENTS.md"), "w", encoding="utf-8").write(
+        "## Specification framework\nSpec format: OpenSpec\n")
+    baseline = os.path.join(repo, "openspec", "specs", "payments", "spec.md")
+    os.makedirs(os.path.dirname(baseline))
+    open(baseline, "w", encoding="utf-8").write("# Approved payments\n")
+    history = [
+        {"timestamp": "2026-08-06T10:00:00Z", "from": "IDLE", "to": "CLASSIFY",
+         "action": "classify", "tier": "OPENSPEC-DIRECT", "ticket": "F-1"},
+        {"timestamp": "2026-08-06T10:00:00Z", "from": "CLASSIFY", "to": "CODE",
+         "action": "bound entry", "tier": "OPENSPEC-DIRECT", "ticket": "F-1",
+         "baseline_digest": openspec_bridge.baseline_digest(repo)},
+    ]
+    state = os.path.join(repo, ".ddw-state.json")
+    json.dump({"phase": "CODE", "tier": "OPENSPEC-DIRECT", "ticket": "F-1",
+               "gates": {}, "history": history}, open(state, "w", encoding="utf-8"))
+    post = [sys.executable, gate, "--mode", "post", "--repo", repo, "--state", state, "--graph", graph]
+    assert subprocess.run(post, capture_output=True, text=True).returncode == 0
+    pause = [sys.executable, transition, "--state", state, "--graph", graph,
+             "--to", "IDLE", "--action", "pause: later", "--write"]
+    assert subprocess.run(pause, cwd=repo, capture_output=True, text=True).returncode == 0
+    assert subprocess.run(post, capture_output=True, text=True).returncode == 0
+    return repo, baseline, state, post
+repo, baseline, state, post = setup()
+resume = [sys.executable, transition, "--state", state, "--graph", graph,
+          "--to", "CODE", "--action", "resume: unchanged", "--write"]
+assert subprocess.run(resume, cwd=repo, capture_output=True, text=True).returncode == 0
+assert subprocess.run(post, capture_output=True, text=True).returncode == 0
+repo, baseline, state, post = setup()
+open(baseline, "w", encoding="utf-8").write("# Changed payments\n")
+resume = [sys.executable, transition, "--state", state, "--graph", graph,
+          "--to", "CODE", "--action", "resume: drifted", "--write"]
+result = subprocess.run(resume, cwd=repo, capture_output=True, text=True)
+assert result.returncode == 2 and "changed after" in result.stderr.lower(), result.stderr
+disk = json.load(open(state, encoding="utf-8"))
+disk.update(phase="CODE", tier="OPENSPEC-DIRECT", ticket="F-1")
+disk["history"].append({"timestamp": "2026-08-06T11:00:00Z", "from": "IDLE", "to": "CODE",
+                        "action": "resume: shell", "tier": "OPENSPEC-DIRECT", "ticket": "F-1"})
+json.dump(disk, open(state, "w", encoding="utf-8"))
+result = subprocess.run(post, capture_output=True, text=True)
+assert result.returncode == 2 and "changed after" in result.stderr.lower(), result.stdout + result.stderr
+PYDIRECTBASELINERESUME
 
-# A checker nothing invokes is a file, not a gate. The pull request is the only
-# place the range exists, which is the one event it has to run on.
-python3 - "$SELF" <<'PYCI' && ok "and CI runs it on pull requests, where the commits arrive" || bad "check_commits.py is in the repo and nothing calls it — see above"
+python3 - "$SELF" <<'PYDIRECTBASELINERELEASE' && ok "a completed direct ticket releases its baseline after verified closeout" || bad "a completed direct ticket still locks the baseline for later work"
+import json, os, subprocess, sys, tempfile
+src = sys.argv[1]
+sys.path.insert(0, os.path.join(src, "ddw", "scripts"))
+import openspec_bridge
+with tempfile.TemporaryDirectory(dir=os.environ["WORK"]) as repo:
+    with open(os.path.join(repo, "AGENTS.md"), "w", encoding="utf-8") as fh:
+        fh.write("## Specification framework\nSpec format: OpenSpec\n")
+    baseline = os.path.join(repo, "openspec", "specs", "payments", "spec.md")
+    os.makedirs(os.path.dirname(baseline))
+    with open(baseline, "w", encoding="utf-8") as fh:
+        fh.write("# Approved payments\n")
+    edges = (("IDLE", "CLASSIFY"), ("CLASSIFY", "CODE"), ("CODE", "CLOSEOUT"), ("CLOSEOUT", "IDLE"))
+    history = [{"timestamp": "2026-08-06T10:00:00Z", "from": a, "to": b,
+                "action": "completed", "tier": "OPENSPEC-DIRECT", "ticket": "F-1"} for a, b in edges]
+    history[1]["baseline_digest"] = openspec_bridge.baseline_digest(repo)
+    state = os.path.join(repo, ".ddw-state.json")
+    with open(state, "w", encoding="utf-8") as fh:
+        json.dump({"phase": "IDLE", "tier": None, "ticket": None, "gates": {}, "history": history}, fh)
+    with open(os.path.join(repo, ".ddw-journal.jsonl"), "w", encoding="utf-8") as fh:
+        for item in history:
+            fh.write(json.dumps(item) + "\n")
+    with open(baseline, "w", encoding="utf-8") as fh:
+        fh.write("# Requirements for a later ticket\n")
+    result = subprocess.run(
+        [sys.executable, os.path.join(src, "ddw", "scripts", "hook-gate.py"), "--mode", "post",
+         "--repo", repo, "--state", state, "--graph", os.path.join(src, "ddw", "rules", "transition-graph.json")],
+        capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+PYDIRECTBASELINERELEASE
+
+python3 - "$SELF" <<'PYDIRECTCANONICALCLOSE' && ok "a direct closeout cannot release its baseline using a different same-length journal" || bad "a noncanonical direct closeout releases its baseline by count alone"
+import json, os, subprocess, sys, tempfile
+src = sys.argv[1]
+sys.path.insert(0, os.path.join(src, "ddw", "scripts"))
+import openspec_bridge
+with tempfile.TemporaryDirectory(dir=os.environ["WORK"]) as repo:
+    with open(os.path.join(repo, "AGENTS.md"), "w", encoding="utf-8") as fh:
+        fh.write("## Specification framework\nSpec format: OpenSpec\n")
+    baseline = os.path.join(repo, "openspec", "specs", "payments", "spec.md")
+    os.makedirs(os.path.dirname(baseline))
+    with open(baseline, "w", encoding="utf-8") as fh:
+        fh.write("# Approved payments\n")
+    edges = (("IDLE", "CLASSIFY"), ("CLASSIFY", "CODE"), ("CODE", "CLOSEOUT"), ("CLOSEOUT", "IDLE"))
+    history = [{"timestamp": "2026-08-06T10:00:00Z", "from": a, "to": b,
+                "action": "close direct ticket", "tier": "OPENSPEC-DIRECT", "ticket": "F-1"} for a, b in edges]
+    history[1]["baseline_digest"] = openspec_bridge.baseline_digest(repo)
+    state = os.path.join(repo, ".ddw-state.json")
+    with open(state, "w", encoding="utf-8") as fh:
+        json.dump({"phase": "IDLE", "tier": None, "ticket": None, "gates": {}, "history": history}, fh)
+    with open(os.path.join(repo, ".ddw-journal.jsonl"), "w", encoding="utf-8") as fh:
+        for item in history[:-1] + [{**history[-1], "action": "different closing record"}]:
+            fh.write(json.dumps(item) + "\n")
+    with open(baseline, "w", encoding="utf-8") as fh:
+        fh.write("# Changed before unverified closeout\n")
+    result = subprocess.run(
+        [sys.executable, os.path.join(src, "ddw", "scripts", "hook-gate.py"), "--mode", "post",
+         "--repo", repo, "--state", state, "--graph", os.path.join(src, "ddw", "rules", "transition-graph.json")],
+        capture_output=True, text=True)
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "journal" in (result.stdout + result.stderr).lower()
+PYDIRECTCANONICALCLOSE
+
+# Required quality steps remain in CI after the metadata-only policy is retired.
+python3 - "$SELF" <<'PYCI' && ok "CI retains its required quality steps" || bad "a required CI quality step is missing or cannot fail"
 import os, sys
 try:
     import yaml
@@ -5867,10 +6061,6 @@ except ImportError:
 wf = yaml.safe_load(open(os.path.join(sys.argv[1], ".github/workflows/verify.yml"),
                         encoding="utf-8"))
 steps = [s for job in wf["jobs"].values() for s in job.get("steps", [])]
-runs = [s for s in steps if "check_commits.py" in str(s.get("run", ""))]
-assert runs, "verify.yml never runs scripts/check_commits.py"
-assert any("pull_request" in str(s.get("if", "")) for s in runs), \
-    "the attribution step is not gated on pull_request, where the range it needs exists"
 
 # The required status contexts are the JOB names, not the steps inside them. So a
 # pull request that deletes the two lines that actually run the suite and the
@@ -7566,13 +7756,7 @@ if not complete:
          f"{WORDS.get(passed)} of {WORDS.get(len(verdicts))}")
 PYCLAUDE
 
-# A step that dies at its first command never ran, and a step that only runs on
-# pull requests dies unwatched in a repository whose work lands on main. Both
-# pull-request-only steps carried `git fetch --depth=0` — not "no limit" but
-# `fatal: depth 0 is not a positive number` — so the version rule and the
-# attribution rule had never once been applied to a pull request. It surfaced on
-# the first one this repository ever opened, which is the whole argument for
-# opening one.
+# The version range needs a usable fetch: `--depth=0` is an error, not "no limit".
 python3 - "$SELF" <<'PYFETCH' && ok "CI's pull-request fetch is a command git will actually run" || bad "a fetch in verify.yml cannot execute, so the step that needs it has never run"
 import os, re, sys
 y = open(os.path.join(sys.argv[1], ".github/workflows/verify.yml"), encoding="utf-8").read()
@@ -8434,15 +8618,20 @@ js = open(os.path.join(repo, ".opencode", "plugins", "ddw.js"), encoding="utf-8"
 # under the wrong key it is never called, so nothing ever boots.
 assert '"session.created":' not in js, "opencode: session.created is an event type, not a hook key"
 assert "event:" in js, "opencode: the generic event hook is missing, so the pipeline never boots"
-# opencode.ai/docs/tools: the real ids. `patch` and `multiedit` do not exist.
-assert '"apply_patch"' in js, "opencode: apply_patch is a real write tool and is not gated"
-assert '"multiedit"' not in js and '"patch"' not in js, "opencode: gating tool ids that do not exist"
-assert '"bash"' in js, "opencode: the post net cannot see the shell, which is what forges a state"
+# OpenCode V1 uses apply_patch/bash; V2 calls those patch/shell. Both must
+# reach the same gate, or a V2 patch edits source without ever being judged.
+assert '"apply_patch"' in js, "opencode: V1 apply_patch is not gated"
+assert 'patch: "apply_patch"' in js, "opencode: V2 patch is not mapped to the gate"
+assert 'shell: "bash"' in js, "opencode: V2 shell is not mapped to the commit/post gates"
+assert '"multiedit"' not in js, "opencode: gating a tool id neither runtime has"
 
 oc = json.load(open(os.path.join(src, "adapters", "opencode", "adapter.json"), encoding="utf-8"))
-perm = oc["agents"]["when_readonly"]["permission"]
-# opencode.ai/docs/agents: the permission keys are read/edit/bash/… — no `write`.
-assert "write" not in perm, "opencode: `write` is not a permission key; edit covers it"
+perm = oc["agents"]["when_readonly"]["permissions"]
+# OpenCode V2 reads ordered action/resource/effect rules, not V1 permission keys.
+assert any(p == {"action": "edit", "resource": "*", "effect": "deny"} for p in perm), \
+    "opencode: read-only agents must deny edits through V2 permissions"
+assert any(p == {"action": "shell", "resource": "*", "effect": "ask"} for p in perm), \
+    "opencode: reviewer shell commands must need approval instead of bypassing edit-deny"
 
 # OpenCode discovers skills and never turns them into /name, so without the
 # commands block its seventeen skills load and have no entry point at all. The
@@ -11418,8 +11607,11 @@ _past_end = "%d/%d" % (len(_mut.MUTATIONS) + 1, len(_mut.MUTATIONS) + 1)
 # the shape this repository already named as not an answer: the coverage number
 # CI publishes was unobtainable, on the pull request that carried the growth,
 # and every check on the branch was green. The budget below is measured, not
-# guessed: a suite run costs about ninety seconds on a GitHub runner, and two
-# minutes is that with room. A shard also pays for one unmutated baseline.
+# guessed: measured at 814 faults, twenty-four complete kill-map shards had a
+# 70-minute median and two reached the 75-minute ceiling. That is about two minutes per
+# suite run; two and a half keeps enough room for runner variation and artifact
+# upload. The fast mutation path keeps its existing two-minute budget because it
+# stops at the first failing layer. A shard also pays for one unmutated baseline.
 import math
 import yaml
 _wf = yaml.safe_load(open(os.path.join(src, ".github/workflows/mutations.yml"), encoding="utf-8"))
@@ -11438,11 +11630,15 @@ for _name, _job in sorted(_sharded.items()):
     _shards = len(_job["strategy"]["matrix"]["shard"])
     _ceiling = int(_job["timeout-minutes"])
     _per_shard = math.ceil(len(_mut.MUTATIONS) / _shards) + 1
-    assert _per_shard * 2 < _ceiling, (
+    _no_fast = any("--no-fast" in (step.get("run") or "")
+                   for step in _job.get("steps", []))
+    _minutes_per_run = 2.5 if _no_fast else 2
+    _estimated_minutes = _per_shard * _minutes_per_run
+    assert _estimated_minutes < _ceiling, (
         "in `%s`, a shard runs %d suite runs (%d faults over %d shards, plus the baseline), "
-        "which is about %d minutes against a timeout of %d. It will be killed and reported as "
+        "which is about %.1f minutes against a timeout of %d. It will be killed and reported as "
         "cancelled. Add shards — never fewer faults." % (_name, _per_shard, len(_mut.MUTATIONS),
-                                                         _shards, _per_shard * 2, _ceiling))
+                                                         _shards, _estimated_minutes, _ceiling))
 
 # And no job that measures the list may be conditional. `--cover` already refuses
 # a conditional `mutations` job — a job that does not run is not coverage — and
@@ -11618,7 +11814,7 @@ python3 - "$SELF" <<'PYSKILLS' && ok "every skill's load-bearing claim is assert
 import os, re, sys
 src = sys.argv[1]
 CLAIMS = {
-    "ddw-commit":            ["AI-assisted:", "gitmoji", "git status"],
+    "ddw-commit":            ["commit-message.txt", "gitmoji", "git status"],
     "ddw-create-adr":        ["docs/adr/", "ADR"],
     "ddw-create-pr":         ["gh pr create", "gates.pr"],
     "ddw-create-prd":        ["docs/ddw/prd/", "PRD loops"],
@@ -12328,34 +12524,27 @@ for rel, call in pre:
         "root is outside the repo, and every guard on DDW's own files answers 'not ours'" % rel
 PYMETHODARG
 
-# /ddw-commit's template against the rule this repo enforces on itself. The
-# template could be changed to emit the trailer `check_commits.py` refuses, and
-# nothing joined the two — so the skill would teach every user to write a commit
-# DDW's own checker rejects.
-python3 - "$SELF" <<'PYTRAILER' && ok "the commit template writes the attribution the repo's own checker demands" || bad "the commit skill's template and the attribution rule disagree — the skill teaches a commit DDW rejects"
+# Generic templates do not invent AI metadata or rewrite the configured Git author.
+python3 - "$SELF" <<'PYTRAILER' && ok "the commit template preserves ordinary Git authorship without AI metadata" || bad "the commit template requires AI metadata or changes the author"
 import os, re, subprocess, sys, tempfile
 src = sys.argv[1]
 skill = open(os.path.join(src, "skills/ddw-commit/SKILL.md"), encoding="utf-8").read()
 assert "Co-Authored-By" not in skill, \
-    "the template teaches a Co-Authored-By trailer, which scripts/check_commits.py refuses"
-m = re.search(r"^AI-assisted:.*$", skill, re.M)
-assert m, "the template no longer carries the attribution trailer at all"
-# Through the checker, not against a string: a commit written the way the skill
-# says has to pass the script that guards this repo's own history.
+    "the generic template must not invent a model identity"
+assert "AI-assisted:" not in skill and "AI-full:" not in skill
+m = re.search(r"^Refs:.*$", skill, re.M)
+assert m, "the commit template no longer references its ticket"
 repo = tempfile.mkdtemp(dir=os.environ["WORK"])
 subprocess.run(["git", "-C", repo, "init", "-q", "-b", "main"], check=True)
 for k, v in (("user.email", "ddw@test"), ("user.name", "ddw"), ("commit.gpgsign", "false")):
     subprocess.run(["git", "-C", repo, "config", k, v], check=True)
 subprocess.run(["git", "-C", repo, "commit", "-q", "--allow-empty", "-m", "base"], check=True)
-base = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"],
-                      capture_output=True, text=True).stdout.strip()
 subprocess.run(["git", "-C", repo, "commit", "-q", "--allow-empty", "-F", "-"],
                input="✨ feat(x): a thing the skill would write\n\n%s\n" % m.group(0),
                text=True, check=True)
-r = subprocess.run([sys.executable, os.path.join(src, "scripts/check_commits.py"),
-                    "--repo", repo, "--since", base], capture_output=True, text=True)
-assert r.returncode == 0, \
-    "a commit written from the skill's own template is refused:\n" + (r.stdout + r.stderr)[-300:]
+author = subprocess.run(["git", "-C", repo, "log", "-1", "--format=%an <%ae>"],
+                        capture_output=True, text=True, check=True).stdout.strip()
+assert author == "ddw <ddw@test>", author
 PYTRAILER
 
 python3 - "$ALL" <<'PYEOF' && ok "a resume requires a pause, from the phase it paused at" || bad "the word resume is a skeleton key: it opens an edge from IDLE to any phase, with any gates"
@@ -12783,13 +12972,10 @@ PROBE
     && bad "OpenCode global install: no .ddw/ in the repo and the plugin enforced NOTHING" \
     || ok "OpenCode global install still enforces: the method is found next to the plugin"
 
-  # A plugin install that enforces but never steers is the failure the first
-  # live PRD run showed: the model coded a monorepo straight from IDLE. The
-  # steering is two hooks — skills registered with OpenCode's discovery, and a
-  # bootstrap prefixed to the first user message — and both have to survive.
-  mkdir -p "$WORK/fakecfg/skills/ddw-classify"
-  printf '%s\n' "name: ddw-classify" > "$WORK/fakecfg/skills/ddw-classify/SKILL.md"
-  cat > "$WORK/opencode-steer-probe.mjs" <<PROBE
+  # Keep the V1 entrypoint covered: it remains exported for existing installs
+  # even though V2 itself uses the documented skill transform below.
+  cp -r "$SELF/skills" "$WORK/fakecfg/skills"
+  cat > "$WORK/opencode-v1-steer-probe.mjs" <<PROBE
 import { DdwPlugin } from "$WORK/fakecfg/plugins/ddw.js"
 const p = await DdwPlugin({ directory: "$WORK/blankrepo" })
 const config = {}
@@ -12805,9 +12991,100 @@ await p["experimental.chat.messages.transform"]({}, output)
 const once = output.messages[0].parts.filter((x) => x.text?.includes("DDW_BOOTSTRAP")).length === 1
 process.exit(registered && steered && once ? 0 : 2)
 PROBE
+  node "$WORK/opencode-v1-steer-probe.mjs" >/dev/null 2>&1 \
+    && ok "OpenCode V1 plugin steers: skills registered, bootstrap rides the first message, once" \
+    || bad "OpenCode V1 plugin install enforces but does not steer — the PRD-to-monorepo failure is back"
+
+  # A plugin install that enforces but never steers is the failure the first
+  # live PRD run showed: the model coded a monorepo straight from IDLE. V2
+  # needs its documented skill transform only from its package layout. Both a
+  # drop-in and the global skills root are native discovery space, so they must
+  # never enter DDW's deliberately strict package parser.
+  mkdir -p "$WORK/dropinrepo"
+  cp -r "$SELF/ddw" "$WORK/dropinrepo/.ddw"
+  mkdir -p "$WORK/package/adapters/opencode/plugin"
+  cp "$SELF/adapters/opencode/plugin/ddw.js" "$WORK/package/adapters/opencode/plugin/ddw.js"
+  cp "$SELF/package.json" "$WORK/package/package.json"
+  cp -r "$SELF/ddw" "$WORK/package/ddw"
+  cp -r "$SELF/skills" "$WORK/package/skills"
+  mkdir -p "$WORK/fakecfg/skills/native-literal"
+  cp -r "$SELF/ddw" "$WORK/ddw"
+  mkdir -p "$WORK/skills/native-literal"
+  cat > "$WORK/fakecfg/skills/native-literal/SKILL.md" <<'SKILL'
+---
+name: "native-literal"
+description: |
+  An unrelated native skill using a literal YAML scalar.
+metadata:
+  owner: user
+---
+
+# Native literal skill
+SKILL
+  cat > "$WORK/skills/native-literal/SKILL.md" <<'SKILL'
+---
+name: "native-literal"
+description: |
+  An unrelated user skill beside the global config root.
+metadata:
+  owner: user
+---
+
+# Native literal skill
+SKILL
+  cat > "$WORK/opencode-steer-probe.mjs" <<PROBE
+import assert from "node:assert/strict"
+import { readFileSync, readdirSync, realpathSync } from "node:fs"
+import { join } from "node:path"
+import packagePlugin from "$WORK/package/adapters/opencode/plugin/ddw.js"
+import globalPlugin from "$WORK/fakecfg/plugins/ddw.js"
+const setup = async (plugin, directory, existing = new Set()) => {
+  const registered = []
+  const hooks = {}
+  let transforms = 0
+  const context = { system: [] }
+  await plugin.setup({
+    location: { directory },
+    skill: { transform: async (apply) => {
+      transforms += 1
+      apply({
+        get: (id) => existing.has(id) ? { id } : undefined,
+        add: (skill) => registered.push(skill),
+      })
+    } },
+    tool: { hook: async (name, apply) => { hooks[name] = apply } },
+    session: { hook: async (name, apply) => { if (name === "context") apply(context) } },
+    event: { subscribe: async function* () {} },
+  })
+  return { registered, transforms, context, hooks }
+}
+const packaged = await setup(packagePlugin, "$WORK/blankrepo")
+assert.equal(packaged.transforms, 1)
+assert.deepEqual(packaged.registered.map((skill) => skill.id).sort(),
+  readdirSync("$WORK/package/skills").sort())
+const status = packaged.registered.find((skill) => skill.id === "ddw-status")
+assert.equal(status.path, realpathSync("$WORK/package/skills/ddw-status/SKILL.md"))
+assert.match(status.description, /Reads \.ddw-state\.json.*Trigger:/s)
+assert.equal(status.content, readFileSync(status.path, "utf8").replace(/^---\n[\s\S]*?\n---\n/, ""))
+assert.match(packaged.context.system[0]?.text || "", /DDW_BOOTSTRAP.*CLASSIFYING/s)
+const nativeOverride = await setup(packagePlugin, "$WORK/blankrepo", new Set(["ddw-status"]))
+assert.equal(nativeOverride.registered.some((skill) => skill.id === "ddw-status"), false)
+assert.equal(nativeOverride.registered.length, readdirSync("$WORK/package/skills").length - 1)
+const dropin = await setup(packagePlugin, "$WORK/dropinrepo")
+assert.equal(dropin.transforms, 0)
+assert.deepEqual(dropin.registered, [])
+const global = await setup(globalPlugin, "$WORK/blankrepo")
+assert.equal(global.transforms, 0)
+assert.deepEqual(global.registered, [])
+assert.equal(typeof global.hooks["execute.before"], "function")
+assert.match(global.context.system[0]?.text || "", /DDW_BOOTSTRAP.*CLASSIFYING/s)
+PROBE
   node "$WORK/opencode-steer-probe.mjs" >/dev/null 2>&1 \
-    && ok "OpenCode plugin steers: skills registered, bootstrap rides the first message, once" \
-    || bad "OpenCode plugin install enforces but does not steer — the PRD-to-monorepo failure is back"
+    && ok "OpenCode V2 registers packaged skills and preserves native ID overrides and drop-ins" \
+    || bad "OpenCode V2 skill registration or drop-in override is broken"
+  node "$WORK/opencode-steer-probe.mjs" >/dev/null 2>&1 \
+    && ok "OpenCode V2 leaves mixed global native skills to discovery while gates stay active" \
+    || bad "OpenCode V2 parses global native skills or skips its global gates"
 else
   echo "  · node not available — OpenCode's plugin was not exercised"
 fi

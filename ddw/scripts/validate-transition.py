@@ -26,6 +26,9 @@ import re
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import openspec_bridge  # noqa: E402 — shared receipt input for the opt-in format
+
 # Verbs that mean a tool is writing. Matched as substrings because every tool
 # spells it differently — `Write`, `write_file`, `create_file`, `apply_patch`,
 # `str_replace_editor`, `NotebookEdit`. A tool whose name says none of these and
@@ -106,8 +109,8 @@ def _reconstruct_new_text(tool_name, tool_input, old_text):
     # that does not name the door it is pointing at is a puzzle, and the least
     # obedient models solve puzzles by looking for the wall's weakest brick.
     _HELPER = (" The state is not edited by hand: run `.ddw/scripts/transition.py --to <phase> "
-               "--action \"…\" --write` (or `--claim <gate>` / `--block N/M`), which validates "
-               "and writes it atomically itself.")
+               "--action \"…\" --write` (or `--claim <gate> --write` / `--block N/M "
+               "--write`), which validates and writes it atomically itself.")
     if tool_name == "Edit":
         old_s = tool_input.get("old_string")
         new_s = tool_input.get("new_string")
@@ -491,7 +494,7 @@ def _check_gates_have_a_ticket(new_state):
         )
 
 
-AUTONOMY_VALUES = ("assisted", "minimal")
+AUTONOMY_VALUES = ("assisted", "minimal", "autonomous")
 
 
 def _check_autonomy(old_state, new_state, appended):
@@ -513,7 +516,7 @@ def _check_autonomy(old_state, new_state, appended):
     raw_new = new_state.get("autonomy")
     if raw_new is not None and raw_new not in AUTONOMY_VALUES:
         raise Block(
-            f"`autonomy` must be null, \"assisted\" or \"minimal\", got {raw_new!r}. An "
+            f"`autonomy` must be null, \"assisted\", \"minimal\" or \"autonomous\", got {raw_new!r}. An "
             "unrecognised value is read as 'not assisted' by anything that tests for the string, "
             "which is the failure mode of every unvalidated enum."
         )
@@ -629,8 +632,8 @@ def _check_the_ticket_has_a_name(new_state, appended, replaying=False):
     if not (isinstance(title, str) and title.strip()):
         raise Block(
             "this edge leaves CLASSIFY with a ticket and no `title`. The name is decided here "
-            "and nowhere else: pass `--title \"<one line>\"` on the same run that sets "
-            "`--ticket`, or put both in the same Write. A state that names no work makes every "
+            "and nowhere else: pass `--title \"<one line>\"` on the same helper run that sets "
+            "`--ticket`, ending it with `--write`. A state that names no work makes every "
             "line the user reads afterwards a reconstruction from context."
         )
 
@@ -908,6 +911,130 @@ def _check_gate_owner(old_state, new_state, graph, appended):
         )
 
 
+_BASELINE_DIGEST = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _is_direct_entry(entry, ticket):
+    return (
+        isinstance(entry, dict)
+        and entry.get("from") == CLASSIFY
+        and entry.get("to") == "CODE"
+        and entry.get("tier") == "OPENSPEC-DIRECT"
+        and entry.get("ticket") == ticket
+    )
+
+
+def _direct_entry_for_ticket(history, ticket, phase):
+    """Find this ticket's entry, following its own pauses but not a closeout."""
+    for entry in reversed(history):
+        if not isinstance(entry, dict) or entry.get("ticket") != ticket:
+            continue
+        if _is_direct_entry(entry, ticket):
+            return entry
+        if entry.get("to") == IDLE and not _is_pause(entry) and phase != IDLE:
+            return None
+    return None
+
+
+def _canonical_journal_entries(history, state_path):
+    """Match journal records to their exact, ordered history prefix."""
+    entries = [
+        entry for entry in _journal_lines(state_path)
+        if isinstance(entry, dict) and "from" in entry and "to" in entry
+    ]
+    out, index = [], 0
+    for recorded in entries:
+        if index < len(history) and recorded == history[index]:
+            out.append(recorded)
+            index += 1
+        elif recorded in out:
+            continue
+        else:
+            raise Block(
+                "OpenSpec direct baseline binding no longer matches its journalled history. Its "
+                "entry was missing, moved, or restamped; restore the canonical state before "
+                "advancing or closing this ticket. Stop and ask for a separate requirements change."
+            )
+    return out
+
+
+def _check_direct_journal_binding(history, entry, ticket, state_path):
+    """Require a blessed direct entry to remain the journal's exact record."""
+    recorded = _canonical_journal_entries(history, state_path)
+    if not recorded:
+        return
+    position = next((i for i, candidate in enumerate(history) if candidate is entry), None)
+    if position is None or position < len(recorded):
+        return
+    for index, earlier in enumerate(recorded):
+        if not _is_direct_entry(earlier, ticket):
+            continue
+        if not any(
+            closed.get("ticket") == ticket
+            and closed.get("to") == IDLE
+            and not _is_pause(closed)
+            for closed in recorded[index + 1:]
+            if isinstance(closed, dict)
+        ):
+            raise Block(
+                "OpenSpec direct baseline binding is already active for this paused ticket. Resume "
+                "it with its original journalled entry; do not reuse the ticket ID to bind a new "
+                "baseline."
+            )
+
+
+def _check_direct_baseline_binding(old_state, new_state, appended, state_path):
+    """Keep a direct ticket bound to the exact baseline it entered with."""
+    tier = new_state.get("tier") or old_state.get("tier")
+    if tier != "OPENSPEC-DIRECT" or not state_path:
+        return
+
+    history = list(old_state.get("history") or []) + list(appended)
+    if old_state.get("phase", IDLE) == IDLE and new_state.get("phase", IDLE) == IDLE:
+        canonical = _canonical_journal_entries(history, state_path)
+        if len(history) == len(canonical):
+            return  # A verified closing edge releases the input baseline for later work.
+    root = os.path.dirname(os.path.abspath(state_path))
+    if not openspec_bridge.opted_in(root):
+        raise Block("OpenSpec direct mode requires AGENTS.md § Specification framework "
+                    "with Spec format: OpenSpec")
+
+    ticket = new_state.get("ticket") or old_state.get("ticket")
+    if not isinstance(ticket, str):
+        ticket = next(
+            (recorded.get("ticket") for recorded in reversed(history)
+             if isinstance(recorded, dict) and isinstance(recorded.get("ticket"), str)),
+            None,
+        )
+    entry = _direct_entry_for_ticket(history, ticket, new_state.get("phase", IDLE))
+    if entry is None:
+        raise Block(
+            "OpenSpec direct baseline binding is missing from this active ticket. It cannot prove "
+            "that the requirements stayed fixed after entry. Stop and ask for a separate "
+            "requirements change; do not advance or close this ticket."
+        )
+    _check_direct_journal_binding(history, entry, ticket, state_path)
+    try:
+        actual = openspec_bridge.baseline_digest(root)
+    except openspec_bridge.OpenSpecError as exc:
+        raise Block(
+            "OpenSpec direct baseline cannot be verified: %s. Stop and ask for a separate "
+            "requirements change; do not advance or close this ticket." % exc
+        ) from exc
+    expected = entry.get("baseline_digest")
+    if not isinstance(expected, str) or not _BASELINE_DIGEST.fullmatch(expected):
+        raise Block(
+            "OpenSpec direct baseline binding is missing from this active ticket. It cannot prove "
+            "that the requirements stayed fixed after entry. Stop and ask for a separate "
+            "requirements change; do not advance or close this ticket."
+        )
+    if actual != expected:
+        raise Block(
+            "OpenSpec direct baseline changed after this ticket entered CODE. Stop and ask for a "
+            "separate requirements change; do not advance or close this ticket."
+        )
+
+
 def validate(old_state, new_state, graph, tool_name=None, max_appended=1,
              gates_scope="all", skip_edges=0, state_path=None):
     old_h, new_h = _check_append_only(old_state, new_state)
@@ -931,6 +1058,7 @@ def validate(old_state, new_state, graph, tool_name=None, max_appended=1,
     # claimed, so the phase it is claimed from has to be judged here or nowhere.
     _check_gate_owner(old_state, new_state, graph, appended)
     _check_gates_have_a_ticket(new_state)
+    _check_direct_baseline_binding(old_state, new_state, appended, state_path)
 
     old_phase = old_state.get("phase", IDLE)
     new_phase = new_state.get("phase", IDLE)
@@ -950,26 +1078,18 @@ def validate(old_state, new_state, graph, tool_name=None, max_appended=1,
     # No transition: an in-phase update. Only valid if the phase did not change.
     if not appended:
         if new_phase != old_phase:
-            core = (
-                f"the phase changed {old_phase}→{new_phase} but you did not add the matching "
-                "history entry. In the SAME write that changes `phase`, append a "
-                "{timestamp, from, to, action} entry at the END of the `history` array."
+            edit_hint = (
+                " An Edit cannot update the phase and append its history entry atomically."
+                if tool_name == "Edit"
+                else ""
             )
-            if tool_name == "Edit":
-                hint = (
-                    " An Edit cannot change the header (at the top) and append to history "
-                    "(at the end) in a single operation: use a Write of the whole file "
-                    "(header + history together), not an Edit."
-                )
-            elif tool_name == "Write":
-                hint = (
-                    " Your Write changed `phase` but the `history` array is missing the new "
-                    "entry — add it at the end and rewrite the file. (The helper "
-                    ".ddw/scripts/transition.py builds the correct JSON for you.)"
-                )
-            else:
-                hint = ""
-            raise Block(core + hint)
+            raise Block(
+                f"the phase changed {old_phase}→{new_phase} but the matching history entry is "
+                f"missing.{edit_hint} Do not repair the JSON by hand: run "
+                f"`.ddw/scripts/transition.py --to {new_phase} --action \"<reason>\" --write` "
+                "from the unchanged state; the helper appends the entry and writes both parts "
+                "atomically."
+            )
         return  # in-phase update (gates, block, discovery): allowed
 
     # With a transition: validate the chain of appended entries.
@@ -1526,6 +1646,16 @@ def source_write_denied(target, root, phase):
         return None
     if any(rel.startswith(pre) for pre in ALLOWED_DIR_PREFIXES):
         return None
+    if phase == "PLAN" and openspec_bridge.is_plan_artifact(root, rel):
+        try:
+            links = os.stat(target, follow_symlinks=False).st_nlink
+        except FileNotFoundError:
+            return None
+        except OSError:
+            return f"cannot inspect `{rel}` for hard links; refusing the write"
+        if links != 1:
+            return f"`{rel}` has multiple hard links; refusing the write during PLAN"
+        return None
 
     if phase == IDLE:
         # From IDLE there is no phase to finish and no ticket to finish it for,
@@ -1691,6 +1821,11 @@ def sealed_artifact_denied(target, root, state):
     gates = state.get("gates") or {}
     rel = os.path.relpath(target, root).replace(os.sep, "/")
     phase = state.get("phase", IDLE)
+    if (state.get("tier") == "OPENSPEC-DIRECT" and phase in ("CODE", "CLOSEOUT")
+            and (rel in ("openspec", "openspec/specs") or rel.startswith("openspec/specs/"))):
+        return (f"`{rel}` is part of the existing OpenSpec baseline, which is read-only input "
+                "for this direct ticket. Implement its requirements without rewriting them. "
+                "If they need to change, stop and ask for a separate requirements change.")
     for gate, owner, template in SEALED_BY_GATE:
         if not gates.get(gate):
             continue                                 # not earned yet — this is where it is written
@@ -1703,6 +1838,19 @@ def sealed_artifact_denied(target, root, state):
                 f"{owner} (the {phase}→{owner} edge is in the graph and clears `{gate}`), fix it "
                 f"there, re-validate, and re-earn the gate. Say out loud that you are going back "
                 f"and why, so the approval that follows is read as the re-approval it is.")
+    if gates.get("spec"):
+        specs = [os.path.join(root, "docs", "ddw", "specs", f"{stem}-{ticket}.md")
+                 for stem in ("spec", "fix")]
+        spec = next((p for p in specs if os.path.isfile(p)), None)
+        if spec:
+            try:
+                with open(spec, encoding="utf-8") as fh:
+                    change = openspec_bridge.change_path(root, fh.read())
+            except (OSError, UnicodeDecodeError, openspec_bridge.OpenSpecError):
+                return "the approved spec's OpenSpec change cannot be read; return to PLAN"
+            if change and rel.startswith(change + "/"):
+                return (f"`{rel}` belongs to the OpenSpec change behind the earned `spec` gate. "
+                        "Return to PLAN, correct and re-validate the change, then re-earn the gate.")
 
 
 # ── The two decisions, in one place each ──────────────────────────────────────
@@ -1889,8 +2037,10 @@ def _receipt_missing(root, state, gate, receipt, subdir, stems, script, artifact
         # again, which makes it the worst shape a refusal can have.
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
+        if receipt == "spec":
+            text = openspec_bridge.receipt_text(root, text)
         digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
-    except (OSError, UnicodeDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, openspec_bridge.OpenSpecError) as exc:
         # Also a refusal. A document nothing can read is a document no receipt
         # can name, and returning None here meant one stray non-UTF-8 byte
         # converted the gate from enforced to decorative.
@@ -2686,7 +2836,8 @@ def _read_state_or_refuse(state_path):
     except (OSError, ValueError) as exc:
         raise Block(
             f".ddw-state.json exists but cannot be read ({exc}). Restore it from the last "
-            "good version and redo the transition with the write tool."
+            "good version only through the explicit recovery process, then redo the transition "
+            "with `.ddw/scripts/transition.py ... --write`."
         )
     return text, parsed
 
@@ -2852,6 +3003,10 @@ def decide_pre(state_path, graph_path, tool_name, tool_input, paths, repo=None, 
             reason = enforcement_write_denied(lexical, root)
             if reason:
                 return reason
+            if disk.get("tier") == "OPENSPEC-DIRECT":
+                reason = sealed_artifact_denied(lexical, root, disk)
+                if reason:
+                    return reason
         reason = source_write_denied(target, root, phase)
         if reason:
             return reason
@@ -2979,7 +3134,7 @@ def _record_arrow(root):
 def second_arrow_in_one_turn(root, old_state, new_state):
     """The reason to refuse a second transition in one response, or None."""
     autonomy = new_state.get("autonomy") or old_state.get("autonomy") or "assisted"
-    if autonomy == "minimal":
+    if autonomy in ("minimal", "autonomous"):
         return None
     turn = _turn_now(root)
     if turn is None:
@@ -3050,7 +3205,7 @@ def goback_gate(root, old_state, new_state, graph):
     if not (isinstance(cfg, dict) and cfg.get("clears")):
         return None                     # forward edges have their own approvals
     autonomy = new_state.get("autonomy") or old_state.get("autonomy") or "assisted"
-    if autonomy == "minimal":
+    if autonomy in ("minimal", "autonomous"):
         return None                     # opted into with the cost stated out loud
     if _turn_now(root) is None:
         return None                     # no turn signal from this tool: declared above
@@ -3219,6 +3374,8 @@ def decisions_record_missing(root, old_state, new_state):
     """
     old_h = old_state.get("history") or []
     new_h = new_state.get("history") or []
+    if (new_state.get("tier") or old_state.get("tier")) == "OPENSPEC-DIRECT":
+        return None
     if len(new_h) != len(old_h) + 1:
         return None
     entry = new_h[-1] if isinstance(new_h[-1], dict) else {}
@@ -3621,8 +3778,9 @@ def source_changed_in_no_source_phase(repo, phase):
     if phase not in NO_SOURCE_PHASES:
         return None
     try:
-        out = subprocess.run(["git", "-C", repo, "status", "--porcelain"],
-                             capture_output=True, text=True, timeout=10)
+        out = subprocess.run(
+            ["git", "-C", repo, "status", "--porcelain", "--untracked-files=all"],
+            capture_output=True, text=True, timeout=10, check=False)
     except (OSError, subprocess.SubprocessError):
         return None                      # no git, or it is not answering: not ours to guess
     if out.returncode != 0:
@@ -3639,12 +3797,10 @@ def source_changed_in_no_source_phase(repo, phase):
         path = path.strip().strip('"')
         if not path or path.rstrip("/").split("/", 1)[0] in _NOT_PRODUCT:
             continue
-        # git reports an untracked DIRECTORY as `docs/`, with the slash. Resolved
-        # to a path it becomes `docs`, which does not start with `docs/` — so the
-        # allowlist missed it and every artifact directory read as product source.
-        # Probing the directory itself keeps the prefix intact.
-        probe = path if path.endswith("/") else path
-        target = resolve_in_repo(probe.rstrip("/") + ("/x" if path.endswith("/") else ""), root)
+        # Keep the prefix intact for entries Git still reports as directories.
+        target = resolve_in_repo(
+            path.rstrip("/") + ("/x" if path.endswith("/") else ""), root
+        )
         if target and source_write_denied(target, root, phase):
             hits.append(path)
         if len(hits) > 5:
@@ -3942,9 +4098,9 @@ def _run_post(args):
             sys.exit(2)
         print(
             "DDW FSM found an ILLEGAL .ddw-state.json on disk: "
-            f"{exc}. You probably wrote it with Bash/jq/sed (which bypass the "
-            "PreToolUse hook). Fix the state and redo the transition with the Write "
-            "tool (whole file: header + history), NEVER with Bash.",
+            f"{exc}. STOP and report the corrupt state; do not edit or rewrite it by hand. "
+            "Normal transitions use `.ddw/scripts/transition.py ... --write`, which refuses "
+            "corrupt input rather than guessing a repair.",
             file=sys.stderr,
         )
         sys.exit(2)

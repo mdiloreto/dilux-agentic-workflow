@@ -6,20 +6,106 @@
 // arguments and piped to the validator on stdin: that is the only way it can
 // judge a write that has not happened yet. Run with stdin closed it sees an
 // empty envelope, exits 0, and the `throw` below becomes unreachable.
-import { existsSync, readFileSync, realpathSync } from "node:fs"
-import { dirname, join } from "node:path"
+import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs"
+import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { execFileSync } from "node:child_process"
 
-// OpenCode's real tool ids (opencode.ai/docs/tools). `apply_patch` is a write
-// tool and belongs here; ids that do not exist match nothing and gate nothing.
-const WRITE_TOOLS = new Set(["write", "edit", "apply_patch"])
+// V1 calls these tools apply_patch and bash; V2 maps patch and shell to them
+// below. IDs that do not exist match nothing and gate nothing.
+const WRITE_TOOLS = new Set(["write", "edit", "apply_patch", "bash"])
 // The post-write net must also watch the shell: `bash` is exactly how a state
 // gets forged behind the pre-write hook, and filtering it out meant the one
 // check that exists to catch that could never see it.
 const POST_TOOLS = new Set([...WRITE_TOOLS, "bash"])
+const BOOT_MARK = "<DDW_BOOTSTRAP>"
 
-export const DdwPlugin = async ({ directory }) => {
+const packagedSkillError = (path, message) => {
+  throw new Error(`DDW: packaged skill ${path} ${message}`)
+}
+
+const parsePackagedSkill = (path, directory) => {
+  let source
+  try {
+    source = readFileSync(path, "utf8")
+  } catch (error) {
+    packagedSkillError(path, `could not be read: ${error.message}`)
+  }
+  const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/.exec(source)
+  if (!frontmatter) packagedSkillError(path, "has no complete frontmatter")
+
+  const fields = {}
+  const lines = frontmatter[1].split(/\r?\n/)
+  for (let index = 0; index < lines.length; index += 1) {
+    const field = /^([A-Za-z][A-Za-z0-9_-]*):[ \t]*(.*)$/.exec(lines[index])
+    if (!field) packagedSkillError(path, `has unsupported frontmatter line ${index + 1}`)
+    const [, key, value] = field
+    if (Object.hasOwn(fields, key)) packagedSkillError(path, `repeats '${key}' in its frontmatter`)
+    if (key === "description" && /^>[+-]?$/.test(value)) {
+      const folded = []
+      for (index += 1; index < lines.length; index += 1) {
+        const line = lines[index]
+        if (!line.trim()) {
+          folded.push("")
+          continue
+        }
+        if (!/^\s/.test(line)) {
+          index -= 1
+          break
+        }
+        folded.push(line.trim())
+      }
+      fields.description = folded.filter(Boolean).join(" ")
+      continue
+    }
+    if (/^[>|]/.test(value)) packagedSkillError(path, `has unsupported '${key}' scalar`)
+    fields[key] = value
+  }
+  for (const key of ["name", "description"]) {
+    if (!fields[key]) packagedSkillError(path, `has no usable '${key}' in its frontmatter`)
+  }
+  if (fields.name !== directory) {
+    packagedSkillError(path, `declares name '${fields.name}', expected '${directory}'`)
+  }
+  return { id: fields.name, name: fields.name, description: fields.description, path, content: frontmatter[2] }
+}
+
+const loadPackagedSkills = (ddw) => {
+  const root = resolve(ddw, "..", "skills")
+  let entries
+  try {
+    entries = readdirSync(root, { withFileTypes: true })
+  } catch (error) {
+    packagedSkillError(root, `could not be read: ${error.message}`)
+  }
+  const directories = entries.filter((entry) => entry.isDirectory()).sort((a, b) => a.name.localeCompare(b.name))
+  if (!directories.length) packagedSkillError(root, "contains no skill directories")
+  return directories.map((entry) => {
+    const path = resolve(root, entry.name, "SKILL.md")
+    if (!existsSync(path)) packagedSkillError(path, "is missing")
+    return parsePackagedSkill(path, entry.name)
+  })
+}
+
+const packageRootFor = (modulePath) => {
+  const root = resolve(dirname(modulePath), "..", "..", "..")
+  try {
+    if (realpathSync(resolve(root, "adapters/opencode/plugin/ddw.js")) !== modulePath) return null
+    const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"))
+    return [manifest.main, manifest.exports].some((entrypoint) => {
+      if (typeof entrypoint !== "string") return false
+      try {
+        return realpathSync(resolve(root, entrypoint)) === modulePath
+      } catch {
+        return false
+      }
+    }) ? root : null
+  } catch {
+    return null
+  }
+}
+
+const methodFor = (directory) => {
   // Repo first, plugin second — the same resolution the Claude plugin's hooks
   // use. A repo that carries its own .ddw/ (drop-in, or vendored to diverge)
   // keeps winning; a repo with none gets the method that travels with this
@@ -27,13 +113,51 @@ export const DdwPlugin = async ({ directory }) => {
   // repo. The state never moves — it is the project's, wherever the method
   // came from. realpathSync: resolved through a symlink the module URL names
   // the link, and the method must be found next to the real file.
-  const here = dirname(realpathSync(fileURLToPath(import.meta.url)))
+  const modulePath = realpathSync(fileURLToPath(import.meta.url))
+  const here = dirname(modulePath)
+  const packageRoot = packageRootFor(modulePath)
   const candidates = [
-    join(directory, ".ddw"),            // drop-in: the repo's own method
-    join(here, "..", "..", "..", "ddw"), // package layout: adapters/opencode/plugin/ → repo root
-    join(here, "..", "ddw"),            // global install: ~/.config/opencode/plugins/ → ~/.config/opencode/ddw
+    { kind: "dropin", path: join(directory, ".ddw") },
+    ...(packageRoot ? [{ kind: "package", path: join(packageRoot, "ddw") }] : []),
+    { kind: "global", path: join(here, "..", "ddw") },
   ]
-  const ddw = candidates.find((c) => existsSync(join(c, "scripts", "hook-gate.py"))) ?? candidates[0]
+  return candidates.find((candidate) => existsSync(join(candidate.path, "scripts", "hook-gate.py"))) ?? candidates[0]
+}
+
+const bootstrapFor = (ddw, state) => {
+  if (!existsSync(join(ddw, "orchestrator.md"))) return ""
+  const dropin = ddw === join(dirname(state), ".ddw")
+  let status = "There is no .ddw-state.json: the pipeline is IDLE — no ticket has been started in this repo."
+  try {
+    const s = JSON.parse(readFileSync(state, "utf8"))
+    status = `Current state: phase ${s.phase}, tier ${s.tier ?? "?"}, ticket ${s.ticket ?? "?"}.`
+  } catch {}
+  return [
+    BOOT_MARK,
+    "This repo is governed by DDW (Dilux Development Workflow), a strict state machine over",
+    "CLASSIFY → DEFINE → PLAN → CODE → VERIFY → CLOSEOUT, recorded in .ddw-state.json at the repo root.",
+    ...(dropin ? [
+      `The method is installed in this repo at ${ddw} — read ${join(ddw, "orchestrator.md")} and follow its Boot Sequence before doing anything else.`,
+      "This is a drop-in installation: keep .ddw/ and .opencode/ intact; do not reinstall over them.",
+      "AGENTS.md contains the project's context and a managed DDW block; preserve both.",
+    ] : [
+      `The method lives at ${ddw} — read ${join(ddw, "orchestrator.md")} and follow its Boot Sequence before doing anything else.`,
+      "The method STAYS with the plugin: do NOT install DDW into this repo — no install.sh, no copying .ddw/ or .opencode/. " +
+      "Where the method's documents say `.ddw/...`, resolve them under the path above. " +
+      "Only .ddw-state.json, the context file and the phase artifacts (docs/) belong in the repo.",
+      "The context file (AGENTS.md) is the PROJECT's, not DDW's: if it is missing, gather the stack and conventions " +
+      "from the user and write it as a plain project file. Never put DDW content in it — no DDW blocks, no DDW " +
+      "template boilerplate, no references to DDW or its phases. A reader without the plugin must see an ordinary repo.",
+    ]),
+    status,
+    "Work that changes this repo starts by CLASSIFYING it into a ticket (the ddw-* skills exist for each phase) — never by writing code first.",
+    "Any message starting with `DDW:` comes from the plugin's gates, not from the user. Obey it literally — especially STOP instructions.",
+    "</DDW_BOOTSTRAP>",
+  ].join("\n")
+}
+
+export const DdwPlugin = async ({ directory }) => {
+  const ddw = methodFor(directory).path
   const state = join(directory, ".ddw-state.json")
   // The skills travel next to the method (repo root of the package). The
   // drop-in does not need this — its skills are installed to .opencode/skills,
@@ -63,31 +187,7 @@ export const DdwPlugin = async ({ directory }) => {
     }
   }
 
-  const BOOT_MARK = "<DDW_BOOTSTRAP>"
-  const bootstrap = () => {
-    if (!existsSync(join(ddw, "orchestrator.md"))) return ""
-    let status = "There is no .ddw-state.json: the pipeline is IDLE — no ticket has been started in this repo."
-    try {
-      const s = JSON.parse(readFileSync(state, "utf8"))
-      status = `Current state: phase ${s.phase}, tier ${s.tier ?? "?"}, ticket ${s.ticket ?? "?"}.`
-    } catch {}
-    return [
-      BOOT_MARK,
-      "This repo is governed by DDW (Dilux Development Workflow), a strict state machine over",
-      "CLASSIFY → DEFINE → PLAN → CODE → VERIFY → CLOSEOUT, recorded in .ddw-state.json at the repo root.",
-      `The method lives at ${ddw} — read ${join(ddw, "orchestrator.md")} and follow its Boot Sequence before doing anything else.`,
-      "The method STAYS with the plugin: do NOT install DDW into this repo — no install.sh, no copying .ddw/ or .opencode/. " +
-      "Where the method's documents say `.ddw/...`, resolve them under the path above. " +
-      "Only .ddw-state.json, the context file and the phase artifacts (docs/) belong in the repo.",
-      "The context file (AGENTS.md) is the PROJECT's, not DDW's: if it is missing, gather the stack and conventions " +
-      "from the user and write it as a plain project file. Never put DDW content in it — no DDW blocks, no DDW " +
-      "template boilerplate, no references to DDW or its phases. A reader without the plugin must see an ordinary repo.",
-      status,
-      "Work that changes this repo starts by CLASSIFYING it into a ticket (the ddw-* skills exist for each phase) — never by writing code first.",
-      "Any message starting with `DDW:` comes from the plugin's gates, not from the user. Obey it literally — especially STOP instructions.",
-      "</DDW_BOOTSTRAP>",
-    ].join("\n")
-  }
+  const bootstrap = () => bootstrapFor(ddw, state)
   const graph = join(ddw, "rules", "transition-graph.json")
   const gate = join(ddw, "scripts", "hook-gate.py")
   const boot = join(ddw, "scripts", "session-boot.py")
@@ -189,7 +289,9 @@ export const DdwPlugin = async ({ directory }) => {
       if (!WRITE_TOOLS.has(input?.tool)) return
       if (!installed()) return
       try {
-        runGate("pre", envelope(input.tool, output?.args ?? {}))
+        const payload = envelope(input.tool, output?.args ?? {})
+        if (input.tool === "bash") runGate("commit", payload)
+        runGate("pre", payload)
       } catch (e) {
         const reason = (e.stderr?.toString() || e.stdout?.toString() || "").trim()
         throw new Error(`DDW blocked the write.\n${reason}`)
@@ -210,4 +312,55 @@ export const DdwPlugin = async ({ directory }) => {
       }
     },
   }
+}
+
+// V2 does not execute the V1 hooks returned by DdwPlugin. Keep that entrypoint
+// for older installations, but register the same enforcement on V2's domains.
+export default {
+  id: "ddw",
+  async setup(ctx) {
+    const directory = ctx.location.directory
+    const method = methodFor(directory)
+    const ddw = method.path
+    const legacy = await DdwPlugin({ directory })
+    const toolName = (tool) => ({ patch: "apply_patch", shell: "bash" })[tool] ?? tool
+    if (method.kind === "package") {
+      const skills = loadPackagedSkills(ddw)
+      await ctx.skill.transform((editor) => {
+        skills.forEach((skill) => {
+          if (!editor.get(skill.id)) editor.add(skill)
+        })
+      })
+    }
+    await ctx.tool.hook("execute.before", (event) => {
+      const tool = toolName(event.tool)
+      const args = event.tool === "patch" ? event.input.patchText : event.input
+      return legacy["tool.execute.before"]({ tool }, { args })
+    })
+    await ctx.tool.hook("execute.after", (event) =>
+      legacy["tool.execute.after"]({ tool: toolName(event.tool) }))
+    await ctx.session.hook("context", (event) => {
+      const text = bootstrapFor(ddw, join(directory, ".ddw-state.json"))
+      if (text) event.system.push({ type: "text", text })
+    })
+    await ctx.session.hook("prompt", () => {
+      if (!existsSync(join(ddw, "scripts", "hook-gate.py"))) return
+      try {
+        execFileSync("python3", [join(ddw, "scripts", "hook-gate.py"), "--mode", "turn",
+                                 "--state", join(directory, ".ddw-state.json"),
+                                 "--graph", join(ddw, "rules", "transition-graph.json"),
+                                 "--repo", directory, "--method", ddw],
+                     { stdio: ["ignore", "ignore", "ignore"] })
+      } catch {} // A missed count delays confirmation; it must not block a user prompt.
+    })
+    const controller = new AbortController()
+    void (async () => {
+      for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+        await legacy.event({ event })
+      }
+    })().catch((error) => {
+      if (!controller.signal.aborted) console.error("DDW: event subscription failed", error)
+    })
+    return () => controller.abort()
+  },
 }

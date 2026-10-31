@@ -13,7 +13,8 @@ Runs the project's tests. Generates missing tests where needed. A blocking gate.
 ## Inputs
 - Scope: an explicit argument, the modified files (`git diff`), or the full suite.
 - `.ddw/rules/testing.instructions.md` for the conventions.
-- The spec/fix-plan, to know which tests are expected.
+- The spec/fix-plan, to know which tests are expected; for `OPENSPEC-DIRECT`,
+  read all `openspec/specs/*/spec.md` instead and test the selected slice.
 - The project's test runner: the "Stack" section of `AGENTS.md`.
 
 ## Execution Protocol

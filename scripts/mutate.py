@@ -435,8 +435,8 @@ MUTATIONS = [
           "            reason = second_arrow_in_one_turn(root, old_state, new_state)")),
     ("minimal gets caught by the rule it opted out of",
      edit("ddw/scripts/validate-transition.py",
-          '    if autonomy == "minimal":\n        return None\n    turn = _turn_now(root)',
-          '    if autonomy == "never-happens":\n        return None\n    turn = _turn_now(root)')),
+          '    if autonomy in ("minimal", "autonomous"):\n        return None\n    turn = _turn_now(root)',
+          '    if autonomy in ("autonomous",):\n        return None\n    turn = _turn_now(root)')),
     # Both halves together: without a counter, `_turn_now` returns 0 instead of
     # None and `_record_arrow` writes anyway, so the first arrow leaves a mark
     # and the second is refused — in every tool that does not write turns.
@@ -547,6 +547,10 @@ MUTATIONS = [
           # gate broke the mutation that guards the others.
           '''GATE_EVIDENCE = {"define": _prd_receipt_missing, "spec": _spec_receipt_missing,''',
           '''GATE_EVIDENCE = {"define": _prd_receipt_missing, "_spec": _spec_receipt_missing,''')),
+    ("an opted-in OpenSpec change attests even after strict validation rejects it",
+     edit("ddw/scripts/openspec_bridge.py",
+          "    if result.returncode:\n",
+          "    if False:\n")),
     ("the spec validator stops counting a block's errors against its tests",
      edit("ddw/scripts/validate_spec.py",
           "        if errors and len(sad) < len(errors):\n",
@@ -598,16 +602,20 @@ MUTATIONS = [
      edit("ddw/scripts/validate-transition.py",
           "    _check_free_is_the_users_word(old_state, new_state, appended, replaying=_replaying)",
           "    _check_free_is_the_users_word(old_state, new_state, appended)")),
-    ("the commit gate stops reading the trailers, and DDW signs its own commits the way its method forbids",
+    ("the fork commit gate requires disclosure for an optional coauthor again",
      edit("ddw/scripts/hook-gate.py",
-          '    bad = [m.group(0) for m in re.finditer(\n'
-          '        r"^[ \\t]*(Co-Authored-By|Signed-off-by-AI|🤖 Generated with[^\\n]*)\\s*:?[^\\n]*$",\n'
-          '        body, re.IGNORECASE | re.MULTILINE)]',
-          '    bad = []')),
-    ("the trailer check goes case-sensitive, and `Co-authored-by` — the spelling the tool actually writes — sails through",
+           '    # NOT consumed here.',
+           '    with open(proposal, encoding="utf-8") as fh:\n'
+           '        if "Co-authored-by:" in fh.read():\n'
+           '            return "AI disclosure required"\n'
+           '    # NOT consumed here.')),
+    ("the fork commit gate rejects optional AI metadata again",
      edit("ddw/scripts/hook-gate.py",
-          '        body, re.IGNORECASE | re.MULTILINE)]',
-          '        body, re.MULTILINE)]')),
+           '    # NOT consumed here.',
+           '    with open(proposal, encoding="utf-8") as fh:\n'
+           '        if "AI-assisted:" in fh.read():\n'
+           '            return "AI metadata refused"\n'
+           '    # NOT consumed here.')),
     ("ripgrep is a write again: `rg` over the method comes back refused",
      edit("ddw/scripts/validate-transition.py",
           'READ_TOOLS = ("rg",)',
@@ -656,16 +664,20 @@ MUTATIONS = [
           "      if (!config.skills.paths.includes(skills)) config.skills.paths.push(skills)\n",
           "")),
     ("the bootstrap stops forbidding the self-install that broke the plugin promise",
+      edit("adapters/opencode/plugin/ddw.js",
+           '      "The method STAYS with the plugin: do NOT install DDW into this repo — no install.sh, no copying .ddw/ or .opencode/. " +\n'
+           '      "Where the method\'s documents say `.ddw/...`, resolve them under the path above. " +\n'
+           '      "Only .ddw-state.json, the context file and the phase artifacts (docs/) belong in the repo.",\n',
+           '')),
+    ("the drop-in bootstrap treats its installed method as an external plugin",
      edit("adapters/opencode/plugin/ddw.js",
-          '      "The method STAYS with the plugin: do NOT install DDW into this repo — no install.sh, no copying .ddw/ or .opencode/. " +\n'
-          '      "Where the method\'s documents say `.ddw/...`, resolve them under the path above. " +\n'
-          '      "Only .ddw-state.json, the context file and the phase artifacts (docs/) belong in the repo.",\n',
-          '')),
+          '  const dropin = ddw === join(dirname(state), ".ddw")',
+          '  const dropin = false')),
     ("the bootstrap lets DDW content leak into the project's context file",
      edit("adapters/opencode/plugin/ddw.js",
-          '      "The context file (AGENTS.md) is the PROJECT\'s, not DDW\'s: if it is missing, gather the stack and conventions " +\n'
-          '      "from the user and write it as a plain project file. Never put DDW content in it — no DDW blocks, no DDW " +\n'
-          '      "template boilerplate, no references to DDW or its phases. A reader without the plugin must see an ordinary repo.",\n',
+           '      "The context file (AGENTS.md) is the PROJECT\'s, not DDW\'s: if it is missing, gather the stack and conventions " +\n'
+           '      "from the user and write it as a plain project file. Never put DDW content in it — no DDW blocks, no DDW " +\n'
+           '      "template boilerplate, no references to DDW or its phases. A reader without the plugin must see an ordinary repo.",\n',
           '')),
     ("the bootstrap never reaches the first user message",
      edit("adapters/opencode/plugin/ddw.js",
@@ -673,8 +685,8 @@ MUTATIONS = [
           "      return")),
     ("the plugin forgets the global method and only ever looks in the repo",
      edit("adapters/opencode/plugin/ddw.js",
-          '    join(here, "..", "ddw"),            // global install: ~/.config/opencode/plugins/ → ~/.config/opencode/ddw\n',
-          '')),
+           '    { kind: "global", path: join(here, "..", "ddw") },\n',
+           '')),
     ("the recovery advice points at git for a file git never had",
      edit("ddw/scripts/hook-gate.py",
           "The user's recovery is restoring their own backup",
@@ -706,8 +718,8 @@ MUTATIONS = [
           '    "session.created": async ({ event }) => {')),
     ("OpenCode stops gating apply_patch",
      edit("adapters/opencode/plugin/ddw.js",
-          'const WRITE_TOOLS = new Set(["write", "edit", "apply_patch"])',
-          'const WRITE_TOOLS = new Set(["write", "edit"])')),
+          'const WRITE_TOOLS = new Set(["write", "edit", "apply_patch", "bash"])',
+          'const WRITE_TOOLS = new Set(["write", "edit", "bash"])')),
     ("Cursor's post net moves back to an event that cannot block",
      json_edit("adapters/cursor/hooks.json",
                lambda d: d["hooks"].update({"afterFileEdit": d["hooks"].pop("postToolUse")}))),
@@ -1476,10 +1488,10 @@ MUTATIONS = [
      edit("ddw/scripts/validate-transition.py",
           '_NOT_PRODUCT = frozenset({".ddw", ".ddw-installed.json", ".git",',
           "_NOT_PRODUCT = frozenset()\n_UNUSED_NOT_PRODUCT = frozenset({")),
-    ("an untracked artifact directory reads as product source again",
+    ("the post-write net ignores untracked files entirely",
      edit("ddw/scripts/validate-transition.py",
-          '        target = resolve_in_repo(probe.rstrip("/") + ("/x" if path.endswith("/") else ""), root)',
-          "        target = resolve_in_repo(probe.rstrip(\"/\"), root)")),
+          '["git", "-C", repo, "status", "--porcelain", "--untracked-files=all"]',
+          '["git", "-C", repo, "status", "--porcelain", "--untracked-files=no"]')),
 
     # ── Compaction ───────────────────────────────────────────────────────────
     # The pipeline's quietest ending: the model keeps answering, from a summary
@@ -1659,40 +1671,36 @@ MUTATIONS = [
           "**Every\n   run, including a re-validation of a PRD that has not changed**",
           "**Every run**")),
 
-    # ── Attribution ──────────────────────────────────────────────────────────
-    # The rule DDW ships to every repo it is installed in, applied here. Each of
-    # these is a way the checker keeps returning success while checking nothing.
-    ("Co-Authored-By stops being refused, and the tool is credited as an author",
-     edit("scripts/check_commits.py", 'COAUTHOR = re.compile(r"^Co-Authored-By:", re.M | re.I)',
-          'COAUTHOR = re.compile(r"^Co-Authored-By-NEVER-MATCHES:", re.M | re.I)')),
-    ("a commit with no attribution at all stops being noticed",
-     edit("scripts/check_commits.py", "        elif not TRAILER.search(body):",
-          "        elif False:")),
-    # The exemption exists so the weekly dependency PR is not red on arrival.
-    # Losing it is not loud: nothing breaks until Monday, in a pull request
-    # nobody is watching, and the rule people learn is "the check is always red".
-    ("the bot exemption goes, and every dependency PR lands red",
-     edit("scripts/check_commits.py", "        if is_bot(name, email):",
-          "        if False:")),
-    # And the other direction: an exemption that stops naming who it exempted is
-    # a check that stopped running, wearing the same green.
-    ("a skipped commit stops being named and is only subtracted",
-     edit("scripts/check_commits.py",
-          '            skipped.append(f"{sha[:9]} {name}")',
-          "            pass")),
-    ("the pull request's own merge commit is held to the attribution rule again",
-     edit("scripts/check_commits.py", '"log", "--no-merges",', '"log",')),
-
-    ("a range git cannot read reports success instead of saying it did not run",
-     edit("scripts/check_commits.py",
-          '        print(f"check_commits: cannot read {args.since}..HEAD — the check did NOT run\\n"\n'
-          '              f"  {out.stderr.strip()}")\n'
-          "        return 1",
-          "        return 0")),
-    ("CI stops asking the question on the pull requests that carry the commits",
+    # ── The fork's optional-metadata policy ────────────────────────────────────
+    # Re-aim the retired policy faults without shrinking the measurement.
+    ("the retired attribution checker is restored at its old path",
+     copy_to("scripts/check_versions.py", "scripts/check_commits.py")),
+    ("commit rules require an AI trailer again",
+     edit("ddw/rules/commits.instructions.md",
+          "This fork requires no AI-specific trailers, PR labels or attribution sections.",
+          "Every commit requires an AI-assisted: yes trailer.")),
+    ("the PR command requires an AI label again",
+     edit("skills/ddw-create-pr/SKILL.md",
+          "gh pr create --body-file",
+          "gh pr create --label AI-assisted --body-file")),
+    ("the PR body template requires an attribution section again",
+     edit("skills/ddw-create-pr/SKILL.md",
+          "## Security\n- SAST:",
+          "## Attribution\nAI-assisted: yes\n\n## Security\n- SAST:")),
+    ("discovery requires an AI label again",
+     edit("ddw/rules/discovery.instructions.md",
+          "No AI-specific label is required.",
+          "An AI-assisted label is required.")),
+    ("tracker comments require an AI footer again",
+     edit("ddw/rules/tracker.instructions.md",
+          "Tests: [X passed, Y total]. Coverage: [XX% lines, XX% branches].",
+          "Tests: [X passed, Y total]. Coverage: [XX% lines, XX% branches].\n[AI-assisted]")),
+    ("fork CI invokes the retired attribution checker again",
      edit(".github/workflows/verify.yml",
-          "          python3 scripts/check_commits.py --since \"origin/${{ github.base_ref }}\"",
-          "          true")),
+          "      - name: The prose agrees with the machine\n",
+          "      - name: Require AI attribution\n"
+          "        run: python3 scripts/check_commits.py --since HEAD~1\n"
+          "      - name: The prose agrees with the machine\n")),
 
     # ── Versions ─────────────────────────────────────────────────────────────
     ("the product ships two different version numbers",
@@ -2085,8 +2093,8 @@ MUTATIONS = [
           "        return None\n        where = tried[0] if len(tried) == 1 else \" or \".join(\"`%s`\" % t for t in tried)")),
     ("a document nothing can decode opens its gate again",
      edit("ddw/scripts/validate-transition.py",
-          "    except (OSError, UnicodeDecodeError) as exc:",
-          "    except (OSError, UnicodeDecodeError) as exc:\n        return None")),
+          "    except (OSError, UnicodeDecodeError, openspec_bridge.OpenSpecError) as exc:",
+          "    except (OSError, UnicodeDecodeError, openspec_bridge.OpenSpecError) as exc:\n        return None")),
     ("a directory named like the document ends the search for it",
      edit("ddw/scripts/validate-transition.py",
           "        if os.path.isfile(cand):", "        if os.path.exists(cand):")),
@@ -2263,9 +2271,9 @@ MUTATIONS = [
      edit(".github/workflows/release.yml", "scripts/verify_install.sh", "true # scripts/verify_install.sh")),
     ("a skill's whole protocol is replaced by a placeholder",
      edit("skills/ddw-help/SKILL.md", "/ddw-self-check", "/ddw-selfcheck")),
-    ("the commit template teaches the trailer this repo refuses",
-     edit("skills/ddw-commit/SKILL.md", "AI-assisted: yes",
-          "Co-Authored-By: Claude <noreply@anthropic.com>")),
+    ("the generic commit template requires AI metadata again",
+     edit("skills/ddw-commit/SKILL.md", "Refs: <ticket>",
+          "Refs: <ticket>\nAI-assisted: yes")),
     ("the method resolves to the plugin even when the repo has its own copy",
      edit("adapters/claude/hooks/lib/guard.sh", "ddw_method() {",
           'ddw_method() {\n  [ -n "$CLAUDE_PLUGIN_ROOT" ] && [ -d "$CLAUDE_PLUGIN_ROOT/ddw" ] && { printf %s "$CLAUDE_PLUGIN_ROOT/ddw"; return 0; }')),
@@ -2545,8 +2553,8 @@ MUTATIONS = [
           "    if True:\n        return None")),
     ("the refusal for a phase without its entry tells an Edit to do what an Edit cannot",
      edit("ddw/scripts/validate-transition.py",
-          '            if tool_name == "Edit":',
-          '            if False:')),
+          '                if tool_name == "Edit"',
+          '                if False')),
     ("the drift warning stops naming what is missing, so a repo with no enforcement looks governed",
      edit("ddw/scripts/session-boot.py",
           "    if not changed and not gone:\n        return []",
@@ -2857,14 +2865,8 @@ MUTATIONS = [
           "machine: it decides what you are allowed to do based on the phase recorded in `.ddw-state.json`.\n")),
     ("OpenCode's plugin stops judging writes before they happen",
      edit("adapters/opencode/plugin/ddw.js",
-          '      if (!WRITE_TOOLS.has(input?.tool)) return\n'
-          '      if (!installed()) return\n'
-          '      try {\n'
-          '        runGate("pre",',
-          '      if (true) return\n'
-          '      if (!installed()) return\n'
-          '      try {\n'
-          '        runGate("pre",')),
+          '      if (!WRITE_TOOLS.has(input?.tool)) return',
+          '      if (true) return')),
     ("W-SAST-01 stops counting the word 'low' and only looks at 'informational'",
      edit("ddw/scripts/validate_sast.py",
           '    lows = [m for m in re.finditer(r"\\b(?:low|informational|informativ\\w*)\\b",',
@@ -3002,10 +3004,10 @@ MUTATIONS = [
     ("a skill is left with its frontmatter `name` different from its directory",
          edit("skills/ddw-create-adr/SKILL.md",
               "name: ddw-create-adr", "name: create-adr")),
-    ("the attribution trailer is only searched for at the start of the message, not line by line",
-         edit("scripts/check_commits.py",
-              'TRAILER = re.compile(r"^(?:AI-assisted|AI-full):\\s*yes\\s*$", re.M | re.I)',
-              'TRAILER = re.compile(r"^(?:AI-assisted|AI-full):\\s*yes\\s*$", re.I)')),
+    ("an optional coauthor bypasses the commit approval seal",
+     edit("ddw/scripts/hook-gate.py",
+          "    if require_seal and sealed != digest:",
+          '    if require_seal and sealed != digest and "Co-authored-by" not in open(proposal, encoding="utf-8").read():')),
     ("the corrective loop returns to VERIFY with the gates it had invalidated",
          multi(  # ← a primitive that does not exist in mutate.py today
            json_edit("ddw/rules/transition-graph.json",
@@ -3207,6 +3209,31 @@ MUTATIONS = [
           "            if reason:\n                return reason\n", "")),
     ("a PRD with no acceptance criteria passes as all zero of them again",
      edit("ddw/scripts/validate_verify.py", "    elif not acs:", "    elif False:")),
+    ("FIX verification goes back to looking for FEATURE blocks instead of fix-plan steps",
+     edit("ddw/scripts/validate_verify.py", '    elif args.tier == "FIX":', '    elif False:')),
+    ("FIX tests go back to counting generic checkmarks without the promised description",
+     edit("ddw/scripts/validate_verify.py",
+          'or description.casefold() not in\n'
+          '                           re.sub(r"[`*]", "", verdicts[number][0][1]).casefold())]',
+          'or False)]')),
+    ("the OpenCode verifier is installed with a legacy permission key V2 ignores",
+     edit('adapters/opencode/adapter.json', '"permissions": [', '"permission": [')),
+    ("the OpenCode verifier can use an unapproved shell to bypass edit-deny",
+     edit('adapters/opencode/adapter.json',
+          '{"action": "shell", "resource": "*", "effect": "ask"}',
+          '{"action": "shell", "resource": "*", "effect": "allow"}')),
+    ("OpenCode V2 loads a plugin that no longer intercepts writes before they land",
+     edit("adapters/opencode/plugin/ddw.js",
+          '    await ctx.tool.hook("execute.before", (event) => {\n'
+          '      const tool = toolName(event.tool)\n'
+          '      const args = event.tool === "patch" ? event.input.patchText : event.input\n'
+          '      return legacy["tool.execute.before"]({ tool }, { args })\n'
+          '    })',
+          '    await ctx.tool.hook("execute.before", () => {})')),
+    ("OpenCode V2 stops counting user turns for approval gates",
+     edit("adapters/opencode/plugin/ddw.js",
+          '    await ctx.session.hook("prompt", () => {',
+          '    await ctx.session.hook("not-a-prompt", () => {')),
     ("a verdict can be checked against another ticket's documents again",
      edit("ddw/scripts/validate_verify.py",
           '    _ticket = re.match(r"verify-(.+)\\.md$", os.path.basename(args.report))',
@@ -3458,8 +3485,8 @@ MUTATIONS = [
           "**One arrow\n  per RESPONSE** holds either way.")),
     ("the autonomy section stops naming the guard that exempts `minimal`",
      edit("ddw/orchestrator.md",
-          "hook agrees — `second_arrow_in_one_turn` exempts this mode",
-          "hook agrees — the enforcement exempts this mode")),
+          "hook agrees — `second_arrow_in_one_turn` exempts both modes",
+          "hook agrees — the enforcement exempts both modes")),
     ("CLASSIFY goes back to reading as an exit that waits in every mode",
      edit("ddw/rules/classify.instructions.md",
           '> **Under `autonomy: "minimal"` this arrow does not wait.** The mode was chosen\n',
@@ -3503,17 +3530,30 @@ MUTATIONS = [
           '  echo "  DDW: $TARGET"')),
     ("the kill map goes back to running only when somebody asks for it",
      edit(".github/workflows/mutations.yml",
-          "    name: which checks can never fail? (shard ${{ matrix.shard }}/24)\n"
+          "    name: which checks can never fail? (shard ${{ matrix.shard }}/32)\n"
           "    needs: anchors",
-          "    name: which checks can never fail? (shard ${{ matrix.shard }}/24)\n"
+          "    name: which checks can never fail? (shard ${{ matrix.shard }}/32)\n"
           "    if: github.event_name == 'workflow_dispatch'\n"
           "    needs: anchors")),
     ("the kill map's shard goes back to a ceiling it does not fit under",
      edit(".github/workflows/mutations.yml",
-          "    # job and of no other. The slowest shard took 38.\n"
+          "    # headroom instead of turning a timeout into an ever-moving target.\n"
           "    timeout-minutes: 75",
-          "    # job and of no other. The slowest shard took 38.\n"
+          "    # headroom instead of turning a timeout into an ever-moving target.\n"
           "    timeout-minutes: 45")),
+    ("the complete kill map returns to too few shards for its timeout",
+     multi(
+         edit(".github/workflows/mutations.yml",
+              "    name: which checks can never fail? (shard ${{ matrix.shard }}/32)",
+              "    name: which checks can never fail? (shard ${{ matrix.shard }}/24)"),
+         edit(".github/workflows/mutations.yml",
+              "        shard: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,\n"
+              "                17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32]",
+              "        shard: [1,2,3,4,5,6,7,8,9,10,11,12,\n"
+              "                13,14,15,16,17,18,19,20,21,22,23,24]"),
+         edit(".github/workflows/mutations.yml",
+              "          python3 scripts/mutate.py --shard ${{ matrix.shard }}/32 --no-fast \\",
+              "          python3 scripts/mutate.py --shard ${{ matrix.shard }}/24 --no-fast \\"))),
     ("the installer pasted from a URL goes back to not finding itself",
      edit("install.sh",
           'if ! { [ -f "$SELF/.claude-plugin/plugin.json" ]',
@@ -3661,10 +3701,103 @@ MUTATIONS = [
           '    store_rows = _store_rows(ws_files.get(STORE_ROWS) or "")',
           "    store_rows = {}")),
     ("a renglón written against an older commit passes as current, and the lag "
-     "the analysis is written over becomes invisible",
-     edit("ddw/scripts/family_impact.py",
-          '                member["row_behind"] = bool(',
-          '                member["row_behind"] = False and bool(')),
+      "the analysis is written over becomes invisible",
+      edit("ddw/scripts/family_impact.py",
+           '                member["row_behind"] = bool(',
+           '                member["row_behind"] = False and bool(')),
+    ("OpenSpec direct entry accepts projects that never opted into OpenSpec",
+     edit("ddw/scripts/validate-transition.py",
+          '    if not openspec_bridge.opted_in(root):',
+          '    if False:')),
+    ("OpenSpec direct CODE closes without SAST evidence",
+     edit("ddw/rules/transition-graph.json",
+           '"gates": ["tests", "sast"]',
+           '"gates": ["tests"]')),
+    ("a direct ticket rewrites the baseline it is implementing",
+     edit("ddw/scripts/validate-transition.py",
+          '    if (state.get("tier") == "OPENSPEC-DIRECT" and phase in ("CODE", "CLOSEOUT")',
+          '    if (False and state.get("tier") == "OPENSPEC-DIRECT" and phase in ("CODE", "CLOSEOUT")')),
+    ("a baseline symlink escapes a direct ticket's write seal",
+     edit("ddw/scripts/validate-transition.py",
+          '            if disk.get("tier") == "OPENSPEC-DIRECT":',
+          '            if False and disk.get("tier") == "OPENSPEC-DIRECT":')),
+    ("a direct ticket accepts a changed baseline",
+     edit("ddw/scripts/validate-transition.py",
+          "    if actual != expected:",
+          "    if False:")),
+    ("a direct ticket starts without binding its baseline",
+     edit("ddw/scripts/transition.py",
+          "                    vt.openspec_bridge.baseline_digest(root)",
+          '                    "0" * 64')),
+    ("a direct ticket can restamp its baseline after the journal blessed it",
+     edit("ddw/scripts/validate-transition.py",
+           "        elif recorded in out:",
+           "        elif True:")),
+    ("a completed direct ticket keeps the baseline locked forever",
+     edit("ddw/scripts/validate-transition.py",
+          "        if len(history) == len(canonical):",
+          "        if False and len(history) == len(canonical):")),
+    ("a completed direct ticket ID cannot start a later direct run",
+     edit("ddw/scripts/validate-transition.py",
+          "            and not _is_pause(closed)", "            and False")),
+    ("a paused direct ticket stops finding its original baseline binding",
+     edit("ddw/scripts/validate-transition.py",
+          "        if entry.get(\"to\") == IDLE and not _is_pause(entry) and phase != IDLE:\n"
+          "            return None",
+          "        if entry.get(\"to\") == IDLE and phase != IDLE:\n"
+          "            return None")),
+    ("an unverified direct closeout is released by journal length alone",
+     edit("ddw/scripts/validate-transition.py",
+          "        canonical = _canonical_journal_entries(history, state_path)",
+          "        canonical = _journal_entries(state_path)")),
+    ("the OpenSpec PLAN allowlist widens to any file under the change",
+     edit("ddw/scripts/openspec_bridge.py",
+          '    r"(?:proposal\\.md|design\\.md|tasks\\.md|"',
+          '    r"(?:[^/]+|"')),
+    ("OpenSpec planning documents bypass the project opt-in",
+     edit("ddw/scripts/openspec_bridge.py",
+          "    return bool(_PLAN_ARTIFACT.fullmatch(rel)) and opted_in(root)",
+          "    return bool(_PLAN_ARTIFACT.fullmatch(rel))")),
+    ("OpenSpec planning documents are allowed outside PLAN",
+     edit("ddw/scripts/validate-transition.py",
+          '    if phase == "PLAN" and openspec_bridge.is_plan_artifact(root, rel):',
+          '    if openspec_bridge.is_plan_artifact(root, rel):')),
+    ("a hard-linked OpenSpec planning document can change product source",
+     edit("ddw/scripts/validate-transition.py",
+          '        if links != 1:\n'
+          '            return f"`{rel}` has multiple hard links; refusing the write during PLAN"\n',
+          "")),
+    ("untracked OpenSpec planning documents hide source or trigger false notices",
+     edit("ddw/scripts/validate-transition.py",
+          '["git", "-C", repo, "status", "--porcelain", "--untracked-files=all"]',
+          '["git", "-C", repo, "status", "--porcelain"]')),
+    ("CLASSIFY runs a preview instead of the canonical atomic transition",
+     edit("ddw/rules/classify.instructions.md",
+          '.ddw/scripts/transition.py --to CLASSIFY --action "clasificar: <the request, in a few words>" --write',
+          '.ddw/scripts/transition.py --to CLASSIFY --action "clasificar: <the request, in a few words>"')),
+    ("the V2 plugin stops registering packaged skills through its documented transform",
+     edit("adapters/opencode/plugin/ddw.js",
+          "    if (method.kind === \"package\") {\n"
+          "      const skills = loadPackagedSkills(ddw)\n"
+          "      await ctx.skill.transform((editor) => {\n"
+          "        skills.forEach((skill) => {\n"
+          "          if (!editor.get(skill.id)) editor.add(skill)\n"
+          "        })\n"
+          "      })\n"
+          "    }\n",
+          "")),
+    ("the V2 plugin parses global native skills instead of leaving discovery authoritative",
+     edit("adapters/opencode/plugin/ddw.js",
+          '    if (method.kind === "package") {',
+          "    if (true) {")),
+    ("the V2 plugin re-registers a native skill that already owns the ID",
+     edit("adapters/opencode/plugin/ddw.js",
+          "          if (!editor.get(skill.id)) editor.add(skill)",
+          "          editor.add(skill)")),
+    ("a global plugin's parent ddw directory is mistaken for a package root",
+     edit("adapters/opencode/plugin/ddw.js",
+          '  const root = resolve(dirname(modulePath), "..", "..", "..")\n',
+          '  const root = resolve(dirname(modulePath), "..", "..", "..")\n  return root\n')),
 ]
 
 

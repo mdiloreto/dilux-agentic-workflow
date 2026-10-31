@@ -88,6 +88,159 @@ def test_the_phases_that_write_code_can_write_code(repo, phase):
     assert vt.source_write_denied(os.path.join(repo, "src/app.py"), repo, phase) is None
 
 
+def test_openspec_direct_needs_opt_in_and_existing_baseline(repo):
+    old = state("CLASSIFY", history=[entry("IDLE", "CLASSIFY")])
+    new = state("CODE", tier="OPENSPEC-DIRECT", ticket="FEAT-1",
+                history=old["history"] + [entry("CLASSIFY", "CODE", tier="OPENSPEC-DIRECT",
+                                                 ticket="FEAT-1")])
+    path = os.path.join(repo, ".ddw-state.json")
+    assert "Spec format: OpenSpec" in refusal(old, new, state_path=path)
+
+    with open(os.path.join(repo, "AGENTS.md"), "w", encoding="utf-8") as fh:
+        fh.write("## Specification framework\nSpec format: OpenSpec\n")
+    assert "openspec/specs" in refusal(old, new, state_path=path)
+
+    os.makedirs(os.path.join(repo, "openspec", "specs", "payments"))
+    spec = os.path.join(repo, "openspec", "specs", "payments", "spec.md")
+    with open(spec, "w", encoding="utf-8") as fh:
+        fh.write("# Payments\n")
+    new["history"][-1]["baseline_digest"] = vt.openspec_bridge.baseline_digest(repo)
+    assert refusal(old, new, state_path=path) is None
+
+    other = os.path.join(repo, "openspec", "specs", "accounts")
+    os.makedirs(other)
+    with open(os.path.join(other, "spec.md"), "wb") as fh:
+        fh.write(b"# Accounts\n\xff")
+    assert "unreadable OpenSpec baseline" in refusal(old, new, state_path=path)
+    os.unlink(os.path.join(other, "spec.md"))
+
+    os.symlink(spec, os.path.join(repo, "openspec", "specs", "payments", "linked.md"))
+    assert "symlink" in refusal(old, new, state_path=path)
+
+
+def test_openspec_direct_still_owes_tests_and_sast(repo):
+    old = state("CODE", tier="OPENSPEC-DIRECT", ticket="FEAT-1",
+                history=[entry("CLASSIFY", "CODE", tier="OPENSPEC-DIRECT", ticket="FEAT-1")])
+    new = state("CLOSEOUT", tier="OPENSPEC-DIRECT", ticket="FEAT-1",
+                history=old["history"] + [entry("CODE", "CLOSEOUT", tier="OPENSPEC-DIRECT",
+                                                ticket="FEAT-1")])
+    assert "tests" in refusal(old, new)
+    new["gates"] = {"tests": True}
+    assert "sast" in refusal(old, new)
+    new["gates"]["sast"] = True
+    assert refusal(old, new) is None
+
+
+@pytest.mark.parametrize("phase", ["CODE", "CLOSEOUT"])
+@pytest.mark.parametrize("tool", ["Write", "Edit", "apply_patch"])
+def test_direct_ticket_refuses_baseline_writes_through_the_gate(repo, phase, tool):
+    baseline = os.path.join(repo, "openspec", "specs", "payments", "spec.md")
+    os.makedirs(os.path.dirname(baseline))
+    with open(baseline, "w", encoding="utf-8") as fh:
+        fh.write("# Approved payments\n")
+    path = os.path.join(repo, ".ddw-state.json")
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(state(phase, tier="OPENSPEC-DIRECT", ticket="FEAT-1"), fh)
+    inputs = {
+        "Write": {"file_path": baseline, "content": "# Weakened payments\n"},
+        "Edit": {"file_path": baseline, "old_string": "Approved", "new_string": "Weakened"},
+        "apply_patch": {"command": "*** Begin Patch\n*** Update File: openspec/specs/payments/spec.md\n@@\n-# Approved payments\n+# Weakened payments\n*** End Patch"},
+    }
+    dialect = ["--dialect", "codex"] if tool == "apply_patch" else []
+    result = subprocess.run(
+        [sys.executable, os.path.join(ROOT, "ddw/scripts/hook-gate.py"), "--mode", "pre",
+         "--repo", repo, "--state", path, "--graph", os.path.join(ROOT, "ddw/rules/transition-graph.json")]
+        + dialect,
+        input=json.dumps({"tool_name": tool, "tool_input": inputs[tool]}),
+        capture_output=True, text=True, cwd=repo,
+    )
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "baseline" in (result.stdout + result.stderr).lower()
+
+
+@pytest.mark.parametrize("target", ["openspec", "openspec/specs", "openspec/specs/new/spec.md"])
+def test_direct_ticket_seals_the_baseline_tree_and_its_parents(repo, target):
+    current = state("CODE", tier="OPENSPEC-DIRECT", ticket="FEAT-1")
+    assert vt.sealed_artifact_denied(os.path.join(repo, target), repo, current)
+
+
+@pytest.mark.parametrize("tier, phase", [
+    ("FEATURE", "CODE"), ("FIX", "CODE"), ("OPENSPEC-DIRECT", "IDLE"),
+])
+def test_direct_baseline_seal_does_not_change_other_workflows(repo, tier, phase):
+    current = state(phase, tier=tier, ticket="FEAT-1")
+    target = os.path.join(repo, "openspec/specs/payments/spec.md")
+    assert vt.sealed_artifact_denied(target, repo, current) is None
+
+
+def test_direct_ticket_still_writes_implementation_code(repo):
+    current = state("CODE", tier="OPENSPEC-DIRECT", ticket="FEAT-1")
+    assert vt.sealed_artifact_denied(os.path.join(repo, "src/payments.py"), repo, current) is None
+
+
+def test_direct_baseline_symlink_cannot_escape_the_seal(repo, tmp_path):
+    outside = tmp_path.parent / (tmp_path.name + "-outside.md")
+    outside.write_text("# Original\n", encoding="utf-8")
+    baseline = os.path.join(repo, "openspec/specs/payments/spec.md")
+    os.makedirs(os.path.dirname(baseline))
+    os.symlink(outside, baseline)
+    path = os.path.join(repo, ".ddw-state.json")
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(state("CODE", tier="OPENSPEC-DIRECT", ticket="FEAT-1"), fh)
+    result = subprocess.run(
+        [sys.executable, os.path.join(ROOT, "ddw/scripts/hook-gate.py"), "--mode", "pre",
+         "--repo", repo, "--state", path, "--graph", os.path.join(ROOT, "ddw/rules/transition-graph.json")],
+        input=json.dumps({"tool_name": "Write", "tool_input": {"file_path": baseline, "content": "changed"}}),
+        capture_output=True, text=True, cwd=repo,
+    )
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "baseline" in (result.stdout + result.stderr).lower()
+
+
+def test_direct_closeout_does_not_require_a_daw_spec_decisions_file(repo):
+    old = state("CODE", tier="OPENSPEC-DIRECT", ticket="FEAT-1",
+                history=[entry("CLASSIFY", "CODE", tier="OPENSPEC-DIRECT", ticket="FEAT-1")])
+    new = state("CLOSEOUT", tier="OPENSPEC-DIRECT", ticket="FEAT-1",
+                history=old["history"] + [entry("CODE", "CLOSEOUT", ticket="FEAT-1")])
+    assert vt.decisions_record_missing(repo, old, new) is None
+    old["tier"] = new["tier"] = "QUICK-FIX"
+    assert "decisions-FEAT-1.md" in vt.decisions_record_missing(repo, old, new)
+
+
+def test_openspec_direct_flag_opens_code_without_spec_gates(repo):
+    with open(os.path.join(repo, "AGENTS.md"), "w", encoding="utf-8") as fh:
+        fh.write("## Specification framework\nSpec format: OpenSpec\n")
+    baseline = os.path.join(repo, "openspec", "specs", "payments")
+    os.makedirs(baseline)
+    with open(os.path.join(baseline, "spec.md"), "w", encoding="utf-8") as fh:
+        fh.write("# Payments\n")
+    path = os.path.join(repo, ".ddw-state.json")
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(state("CLASSIFY", history=[entry("IDLE", "CLASSIFY")]), fh)
+
+    cmd = [sys.executable, os.path.join(ROOT, "ddw", "scripts", "transition.py"),
+           "--state", path, "--to", "CODE", "--direct-openspec", "--ticket", "FEAT-1",
+           "--title", "Payments", "--autonomy", "autonomous",
+           "--action", "existing OpenSpec baseline"]
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=repo)
+    assert result.returncode == 0, result.stderr
+    output = json.loads(result.stdout)
+    assert output["phase"] == "CODE"
+    assert output["tier"] == "OPENSPEC-DIRECT"
+    assert output["autonomy"] == "autonomous"
+    assert output["gates"] == {}
+    assert output["history"][-1]["to"] == "CODE"
+    assert output["history"][-1]["baseline_digest"] == vt.openspec_bridge.baseline_digest(repo)
+
+    conflict = subprocess.run(cmd + ["--tier", "FEATURE"], capture_output=True, text=True,
+                              cwd=repo)
+    assert conflict.returncode != 0
+    no_flag = subprocess.run([arg for arg in cmd if arg != "--direct-openspec"]
+                             + ["--tier", "OPENSPEC-DIRECT"], capture_output=True, text=True,
+                             cwd=repo)
+    assert no_flag.returncode != 0
+
+
 @pytest.mark.parametrize("rel", ["docs/ddw/prd/prd-T-1.md", "AGENTS.md", "CHANGELOG.md",
                                  ".claude/settings.json", ".gitignore"])
 def test_a_repository_at_rest_still_writes_what_it_needs(repo, rel):
@@ -309,6 +462,342 @@ def _pre(repo, path, content="x", tool="Write"):
                              tool, {"file_path": path, "content": content}, [path], repo=repo)
     except vt.Block as exc:
         return str(exc)
+
+
+def _direct_baseline_repo(tmp_path, *, phase="CODE", journal=True):
+    repo = _repo_at(tmp_path, phase=phase, tier="OPENSPEC-DIRECT", gates={})
+    (tmp_path / "r" / "AGENTS.md").write_text(
+        "## Specification framework\nSpec format: OpenSpec\n", encoding="utf-8"
+    )
+    baseline = tmp_path / "r" / "openspec" / "specs" / "payments" / "spec.md"
+    baseline.parent.mkdir(parents=True)
+    baseline.write_text("# Approved payments\n", encoding="utf-8")
+    digest = vt.openspec_bridge.baseline_digest(repo)
+    history = [
+        entry("IDLE", "CLASSIFY", tier="OPENSPEC-DIRECT", ticket="T-1"),
+        entry("CLASSIFY", "CODE", tier="OPENSPEC-DIRECT", ticket="T-1",
+              baseline_digest=digest),
+    ]
+    if phase == "CLOSEOUT":
+        history.append(entry("CODE", "CLOSEOUT", tier="OPENSPEC-DIRECT", ticket="T-1"))
+    state_path = tmp_path / "r" / ".ddw-state.json"
+    state_path.write_text(json.dumps(state(phase, "OPENSPEC-DIRECT", "T-1", {}, history)),
+                          encoding="utf-8")
+    if journal:
+        _journal(repo, history)
+    return repo, baseline, str(state_path)
+
+
+def _post_reason(state_path):
+    try:
+        return vt.decide_post(state_path, os.path.join(ROOT, "ddw/rules/transition-graph.json"))
+    except vt.Block as exc:
+        return str(exc)
+
+
+def _real_post(repo, state_path):
+    return subprocess.run(
+        [sys.executable, os.path.join(ROOT, "ddw/scripts/validate-transition.py"),
+         "--mode", "post", "--state", state_path,
+         "--graph", os.path.join(ROOT, "ddw/rules/transition-graph.json"), "--repo", repo],
+        input="{}", capture_output=True, text=True,
+    )
+
+
+def _direct_transition(repo, state_path, *args):
+    return subprocess.run(
+        [sys.executable, os.path.join(ROOT, "ddw/scripts/transition.py"),
+         "--state", state_path,
+         "--graph", os.path.join(ROOT, "ddw/rules/transition-graph.json"),
+         *args, "--write"],
+        capture_output=True, text=True, cwd=repo,
+    )
+
+
+def _pause_direct_ticket(repo, state_path):
+    assert _real_post(repo, state_path).returncode == 0
+    paused = _direct_transition(repo, state_path, "--to", "IDLE", "--action", "pause: later")
+    assert paused.returncode == 0, paused.stderr[-300:]
+    assert _real_post(repo, state_path).returncode == 0
+
+
+def test_direct_ticket_allows_implementation_writes_with_an_intact_baseline(tmp_path):
+    repo, _, _ = _direct_baseline_repo(tmp_path)
+    assert _pre(repo, os.path.join(repo, "src", "payments.py")) is None
+
+
+@pytest.mark.parametrize("change", ["bytes", "add", "delete", "symlink", "outside"])
+def test_post_refuses_any_direct_baseline_drift_after_the_entry_is_blessed(tmp_path, change):
+    repo, baseline, state_path = _direct_baseline_repo(tmp_path)
+    if change == "bytes":
+        baseline.write_text("# Changed payments\n", encoding="utf-8")
+    elif change == "add":
+        (baseline.parent / "notes.md").write_text("new requirement\n", encoding="utf-8")
+    elif change == "delete":
+        baseline.unlink()
+    elif change == "symlink":
+        baseline.unlink()
+        (baseline.parent / "linked.md").symlink_to("spec.md")
+    else:
+        outside = tmp_path / "outside-spec.md"
+        outside.write_text("# Outside requirements\n", encoding="utf-8")
+        baseline.unlink()
+        baseline.symlink_to(outside)
+
+    why = _post_reason(state_path)
+    assert why and "baseline" in why.lower(), f"{change} changed the direct baseline: {why!r}"
+
+
+def test_direct_ticket_without_a_fingerprint_stops_explicitly(tmp_path):
+    _, _, state_path = _direct_baseline_repo(tmp_path)
+    with open(state_path, encoding="utf-8") as fh:
+        disk = json.load(fh)
+    disk["history"][-1].pop("baseline_digest")
+    with open(state_path, "w", encoding="utf-8") as fh:
+        json.dump(disk, fh)
+
+    why = _post_reason(state_path)
+    assert why and "baseline" in why.lower()
+    assert "requirements change" in why.lower()
+
+
+def test_direct_ticket_cannot_restamp_its_blessed_baseline_fingerprint(tmp_path):
+    repo, baseline, state_path = _direct_baseline_repo(tmp_path)
+    baseline.write_text("# Changed payments\n", encoding="utf-8")
+    with open(state_path, encoding="utf-8") as fh:
+        disk = json.load(fh)
+    disk["history"][-1]["baseline_digest"] = vt.openspec_bridge.baseline_digest(repo)
+    with open(state_path, "w", encoding="utf-8") as fh:
+        json.dump(disk, fh)
+
+    why = _post_reason(state_path)
+    assert why and "baseline" in why.lower()
+    assert "journal" in why.lower()
+
+
+@pytest.mark.parametrize("journalled", [False, True])
+def test_direct_baseline_binding_ends_only_after_journalled_closeout(tmp_path, journalled):
+    repo, baseline, state_path = _direct_baseline_repo(tmp_path, phase="CLOSEOUT")
+    with open(state_path, encoding="utf-8") as fh:
+        disk = json.load(fh)
+    history = disk["history"] + [
+        entry("CLOSEOUT", "IDLE", tier="OPENSPEC-DIRECT", ticket="T-1")
+    ]
+    with open(state_path, "w", encoding="utf-8") as fh:
+        json.dump(state(history=history), fh)
+    if journalled:
+        _journal(repo, history)
+        assert _post_reason(state_path) is None
+
+    baseline.write_text("# Requirements for a later ticket\n", encoding="utf-8")
+    why = _post_reason(state_path)
+    if journalled:
+        assert why is None, "a completed ticket still owns the baseline: " + str(why)
+    else:
+        assert why and "baseline" in why.lower(), "an unverified closeout released the baseline"
+
+
+def test_direct_baseline_drift_cannot_close_with_the_helper(tmp_path):
+    repo, baseline, state_path = _direct_baseline_repo(tmp_path, phase="CLOSEOUT")
+    with open(state_path, encoding="utf-8") as fh:
+        disk = json.load(fh)
+    disk["gates"] = {"commit": True, "pr": True}
+    with open(state_path, "w", encoding="utf-8") as fh:
+        json.dump(disk, fh)
+    baseline.write_text("# Changed payments\n", encoding="utf-8")
+
+    result = subprocess.run(
+        [sys.executable, os.path.join(ROOT, "ddw", "scripts", "transition.py"),
+         "--state", state_path, "--to", "IDLE", "--action", "close direct ticket", "--write"],
+        capture_output=True,
+        text=True,
+        cwd=repo,
+    )
+    assert result.returncode == 2
+    assert "baseline" in result.stderr.lower()
+
+
+def test_direct_baseline_drift_cannot_close_with_a_handwritten_state_write(tmp_path):
+    repo, baseline, state_path = _direct_baseline_repo(tmp_path)
+    with open(state_path, encoding="utf-8") as fh:
+        old = json.load(fh)
+    new = json.loads(json.dumps(old))
+    new["phase"] = "CLOSEOUT"
+    new["gates"] = {"tests": True, "sast": True}
+    new["history"].append(entry("CODE", "CLOSEOUT", tier="OPENSPEC-DIRECT", ticket="T-1"))
+    baseline.write_text("# Changed payments\n", encoding="utf-8")
+
+    why = _pre(repo, state_path, json.dumps(new))
+    assert why and "baseline" in why.lower()
+
+
+def test_real_post_rejects_a_restamped_journalled_direct_entry(tmp_path):
+    repo, baseline, state_path = _direct_baseline_repo(tmp_path, journal=False)
+    assert _real_post(repo, state_path).returncode == 0
+    journal = open(os.path.join(repo, ".ddw-journal.jsonl"), encoding="utf-8").read()
+    baseline.write_text("# Changed payments\n", encoding="utf-8")
+    with open(state_path, encoding="utf-8") as fh:
+        disk = json.load(fh)
+    disk["history"][-1].update({
+        "timestamp": "2026-10-28T11:00:00Z",
+        "action": "restamped direct entry",
+        "baseline_digest": vt.openspec_bridge.baseline_digest(repo),
+    })
+    with open(state_path, "w", encoding="utf-8") as fh:
+        json.dump(disk, fh)
+
+    result = _real_post(repo, state_path)
+
+    assert result.returncode == 2
+    assert "journal" in result.stderr.lower()
+    assert open(os.path.join(repo, ".ddw-journal.jsonl"), encoding="utf-8").read() == journal
+
+
+@pytest.mark.parametrize("fault", ["padding", "reorder"])
+def test_direct_closeout_requires_exact_journal_history_not_only_its_length(tmp_path, fault):
+    repo, baseline, state_path = _direct_baseline_repo(tmp_path, phase="CLOSEOUT")
+    with open(state_path, encoding="utf-8") as fh:
+        history = json.load(fh)["history"]
+    closing = entry("CLOSEOUT", "IDLE", "close direct ticket", tier="OPENSPEC-DIRECT", ticket="T-1")
+    with open(state_path, "w", encoding="utf-8") as fh:
+        json.dump(state(history=history + [closing]), fh)
+    if fault == "padding":
+        recorded = history + [{**closing, "action": "different closing record"}]
+    else:
+        recorded = [history[1], history[0], history[2], closing]
+    _journal(repo, recorded)
+    journal_path = os.path.join(repo, ".ddw-journal.jsonl")
+    with open(journal_path, encoding="utf-8") as fh:
+        before = fh.read()
+    baseline.write_text("# Changed before unverified closeout\n", encoding="utf-8")
+
+    result = _real_post(repo, state_path)
+
+    assert result.returncode == 2
+    assert "journal" in result.stderr.lower()
+    with open(journal_path, encoding="utf-8") as fh:
+        assert fh.read() == before
+
+
+def test_paused_direct_ticket_resumes_against_its_original_bound_baseline(tmp_path):
+    repo, _, state_path = _direct_baseline_repo(tmp_path, journal=False)
+    _pause_direct_ticket(repo, state_path)
+
+    resumed = _direct_transition(
+        repo, state_path, "--to", "CODE", "--action", "resume: continue direct ticket"
+    )
+
+    assert resumed.returncode == 0, resumed.stderr[-300:]
+    assert _real_post(repo, state_path).returncode == 0
+
+
+def test_paused_direct_ticket_refuses_baseline_drift_in_helper_and_real_post(tmp_path):
+    repo, baseline, state_path = _direct_baseline_repo(tmp_path, journal=False)
+    _pause_direct_ticket(repo, state_path)
+    baseline.write_text("# Changed payments\n", encoding="utf-8")
+
+    resumed = _direct_transition(
+        repo, state_path, "--to", "CODE", "--action", "resume: changed requirements"
+    )
+
+    assert resumed.returncode == 2
+    assert "changed after" in resumed.stderr.lower()
+    with open(state_path, encoding="utf-8") as fh:
+        disk = json.load(fh)
+    disk.update({"phase": "CODE", "tier": "OPENSPEC-DIRECT", "ticket": "T-1"})
+    disk["history"].append(entry("IDLE", "CODE", "resume: shell", tier="OPENSPEC-DIRECT",
+                                 ticket="T-1"))
+    with open(state_path, "w", encoding="utf-8") as fh:
+        json.dump(disk, fh)
+
+    post = _real_post(repo, state_path)
+
+    assert post.returncode == 2
+    assert "changed after" in post.stderr.lower()
+
+
+def test_paused_direct_ticket_uses_its_own_binding_not_another_tickets(tmp_path):
+    repo = _repo_at(tmp_path, phase="CODE", tier="OPENSPEC-DIRECT", ticket="T-1", gates={})
+    (tmp_path / "r" / "AGENTS.md").write_text(
+        "## Specification framework\nSpec format: OpenSpec\n", encoding="utf-8"
+    )
+    baseline = tmp_path / "r" / "openspec" / "specs" / "payments" / "spec.md"
+    baseline.parent.mkdir(parents=True)
+    baseline.write_text("# Approved payments\n", encoding="utf-8")
+    digest = vt.openspec_bridge.baseline_digest(repo)
+    history = [
+        entry("IDLE", "CLASSIFY", "classify", tier="OPENSPEC-DIRECT", ticket="T-1"),
+        entry("CLASSIFY", "CODE", "bound entry", tier="OPENSPEC-DIRECT", ticket="T-1",
+              baseline_digest=digest),
+        entry("CODE", "IDLE", "pause: later", tier="OPENSPEC-DIRECT", ticket="T-1"),
+        entry("IDLE", "CLASSIFY", "classify", tier="OPENSPEC-DIRECT", ticket="T-2"),
+        entry("CLASSIFY", "CODE", "bound entry", tier="OPENSPEC-DIRECT", ticket="T-2",
+              baseline_digest=digest),
+        entry("CODE", "IDLE", "pause: later", tier="OPENSPEC-DIRECT", ticket="T-2"),
+        entry("IDLE", "CODE", "resume: now", tier="OPENSPEC-DIRECT", ticket="T-1"),
+    ]
+    state_path = os.path.join(repo, ".ddw-state.json")
+    with open(state_path, "w", encoding="utf-8") as fh:
+        json.dump(state("CODE", "OPENSPEC-DIRECT", "T-1", {}, history), fh)
+    _journal(repo, history[:-1])
+
+    post = _real_post(repo, state_path)
+
+    assert post.returncode == 0, post.stderr[-300:]
+
+
+def test_reused_direct_ticket_id_does_not_inherit_a_completed_binding(tmp_path):
+    repo = _repo_at(tmp_path, phase="CODE", tier="OPENSPEC-DIRECT", ticket="T-1", gates={})
+    (tmp_path / "r" / "AGENTS.md").write_text(
+        "## Specification framework\nSpec format: OpenSpec\n", encoding="utf-8"
+    )
+    baseline = tmp_path / "r" / "openspec" / "specs" / "payments" / "spec.md"
+    baseline.parent.mkdir(parents=True)
+    baseline.write_text("# Original requirements\n", encoding="utf-8")
+    old_digest = vt.openspec_bridge.baseline_digest(repo)
+    history = [
+        entry("IDLE", "CLASSIFY", "old classify", tier="OPENSPEC-DIRECT", ticket="T-1"),
+        entry("CLASSIFY", "CODE", "old entry", tier="OPENSPEC-DIRECT", ticket="T-1",
+              baseline_digest=old_digest),
+        entry("CODE", "CLOSEOUT", "old closeout", tier="OPENSPEC-DIRECT", ticket="T-1"),
+        entry("CLOSEOUT", "IDLE", "old close", tier="OPENSPEC-DIRECT", ticket="T-1"),
+    ]
+    _journal(repo, history)
+    baseline.write_text("# Replacement requirements\n", encoding="utf-8")
+    history.extend([
+        entry("IDLE", "CLASSIFY", "new classify", tier="OPENSPEC-DIRECT", ticket="T-1"),
+        entry("CLASSIFY", "CODE", "new entry", tier="OPENSPEC-DIRECT", ticket="T-1",
+              baseline_digest=vt.openspec_bridge.baseline_digest(repo)),
+    ])
+    state_path = os.path.join(repo, ".ddw-state.json")
+    with open(state_path, "w", encoding="utf-8") as fh:
+        json.dump(state("CODE", "OPENSPEC-DIRECT", "T-1", {}, history), fh)
+
+    post = _real_post(repo, state_path)
+
+    assert post.returncode == 0, post.stderr[-300:]
+
+
+def test_non_direct_ticket_does_not_bind_its_baseline(tmp_path):
+    repo = _repo_at(tmp_path, phase="CODE", tier="FEATURE", ticket="T-1",
+                    gates={"define": True, "spec": True, "threat": True})
+    history = [
+        entry("IDLE", "CLASSIFY", tier="FEATURE", ticket="T-1"),
+        entry("CLASSIFY", "DEFINE", tier="FEATURE", ticket="T-1"),
+        entry("DEFINE", "PLAN", tier="FEATURE", ticket="T-1"),
+        entry("PLAN", "CODE", tier="FEATURE", ticket="T-1"),
+    ]
+    state_path = os.path.join(repo, ".ddw-state.json")
+    with open(state_path, "w", encoding="utf-8") as fh:
+        json.dump(state("CODE", "FEATURE", "T-1",
+                        {"define": True, "spec": True, "threat": True}, history), fh)
+    _journal(repo, history)
+    baseline = os.path.join(repo, "openspec", "specs", "payments", "spec.md")
+    os.makedirs(os.path.dirname(baseline))
+    with open(baseline, "w", encoding="utf-8") as fh:
+        fh.write("# Unrelated baseline\n")
+
+    assert _post_reason(state_path) is None
 
 
 def test_a_write_to_the_state_is_judged_not_waved_through(tmp_path):
@@ -977,6 +1466,17 @@ def test_en_minimal_las_flechas_no_esperan(tmp_path):
            "--autonomy", "minimal", "--action", "clasificar")
     assert _arrow(d, "--to", "DEFINE", "--tier", "FEATURE", "--ticket", "F-1",
                   "--action", "definir") is None, "minimal got caught by the rule"
+
+
+def test_en_autonomous_las_flechas_no_esperan(tmp_path):
+    """What `autonomous` adds to `minimal` is the acts that leave the repo;
+    the arrows chain the same way."""
+    d = _repo_con_estado(tmp_path, autonomy="autonomous")
+    _turn_passes(d)
+    _arrow(d, "--to", "CLASSIFY", "--tier", "FEATURE", "--ticket", "F-1",
+           "--autonomy", "autonomous", "--action", "clasificar")
+    assert _arrow(d, "--to", "DEFINE", "--tier", "FEATURE", "--ticket", "F-1",
+                  "--action", "definir") is None, "autonomous got caught by the rule"
 
 
 def test_sin_señal_de_turno_no_se_refusa_nada(tmp_path):

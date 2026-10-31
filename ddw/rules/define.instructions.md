@@ -1,6 +1,6 @@
 ---
 applyTo: '**'
-version: 2.12.0
+version: 2.13.0
 ---
 
 # Phase 1: DEFINE (Requirements Definition)
@@ -489,7 +489,7 @@ promise the enforcement could never let the model keep.
    .ddw/scripts/transition.py --to DEFINE --tier <TIER> --ticket {TICKET}a \
        --title "<the child's name, one line>" \
        --autonomy <the mode this child runs under> \
-       --action "split: abrir {TICKET}a — <title>"
+       --action "split: abrir {TICKET}a — <title>" --write
    ```
 
    The `split:` verb is the declaration the hook verifies: the parent's newest entry must be its
@@ -498,9 +498,9 @@ promise the enforcement could never let the model keep.
    pause's, and the journal must have seen the pause land. The child opens with `gates: {}` —
    whatever the parent earned closed with the parent.
 
-   **Paste the helper's output VERBATIM**, filling in only `title`/`tracker` in that same write.
-   Never touch an existing history entry — editing the pause's stamp to "fit" the child is
-   exactly the mutation the append-only check refuses, and it was tried.
+   The helper lands the complete state atomically; pass any tracker through `--tracker` in the same
+   command. Never touch an existing history entry — editing the pause's stamp to "fit" the child
+   is exactly the mutation the append-only check refuses, and it was tried.
 
 Then rename the branch to `feat/{TICKET}a-short-name` (or create it and discard the previous).
 

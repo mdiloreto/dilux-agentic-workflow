@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """DDW's sanctioned FSM transition primitive.
 
-Prints the COMPLETE JSON of the next .ddw-state.json for ONE phase transition to
-stdout, ready to paste into a `Write` tool call. Read-only: it does NOT write the
-state. The actual write is done by the model with `Write`, which the PreToolUse
-hook validates.
+Build and validate the COMPLETE JSON of the next .ddw-state.json for ONE phase
+transition. With `--write`, atomically replace the state after validation; this
+is the canonical path. Without `--write`, print a read-only preview to stdout.
 
 It builds the transition deterministically (reads the state from disk, appends
 {timestamp, from, to, action} at the END of history, sets phase + gates) and
@@ -17,13 +16,10 @@ JSON is emitted.
 edge: IDLE→CLASSIFY and CLASSIFY→DEFINE are separate runs (a direct IDLE→DEFINE
 is not in the graph and gets rejected).
 
-The only metadata the helper sets is `--tier` and `--autonomy` (both enums —
-shell-safe, and the two things chosen once in CLASSIFY that the rest of the run
-is routed by). The other fields
-(ticket/title/tracker, and the discovery object) are NOT handled here:
-the model fills them in in the SAME Write where it pastes this output. Passing
-free text (e.g. a title with spaces) through shell args broke the quoting, so
-`--set` was removed.
+Metadata has explicit flags (`--tier`, `--autonomy`, `--ticket`, `--title`, and
+`--tracker`) instead of a generic `--set`. The caller passes each value as one
+argument; the helper owns the complete state mutation and no follow-up edit is
+required.
 """
 import argparse
 import importlib.util
@@ -269,8 +265,8 @@ def build_next_state(old_state, to_phase, action, gates, tier, clear_gates=(),
     # lies by omission — and this is the only place that distinction can live,
     # because the header resets when the ticket closes.
     run_auto = new_state.get("autonomy") or old_state.get("autonomy")
-    if run_auto == "minimal":
-        entry["autonomy"] = "minimal"
+    if run_auto in ("minimal", "autonomous"):
+        entry["autonomy"] = run_auto
     history.append(entry)
     new_state["history"] = history
     return new_state
@@ -393,10 +389,9 @@ def _emit(args, state, seen=None, vt=None, graph=None):
         # every harness, whatever the model does with its prose.
         print(_status_box(state, vt, graph), file=sys.stderr)
     if not args.write:
-        # The helper PRINTS by design: the state has to land through a `Write`,
-        # because that is the door PreToolUse guards. What it did not do was say
-        # so, and its stdout is a complete, valid state file — indistinguishable
-        # from one that landed.
+        # Preview remains useful to inspect the exact next state, but it must not
+        # look like a completed transition. The same helper owns the validated,
+        # locked and atomic write when rerun with --write.
         #
         # Measured live on Copilot: the model ran the documented command, read
         # back a state saying `"phase": "CLASSIFY"`, told the user the pipeline
@@ -408,15 +403,15 @@ def _emit(args, state, seen=None, vt=None, graph=None):
         # On stderr so nothing that parses stdout has to change, and next to the
         # output it governs, which is the only place a rule is certain to be
         # read.
-        print("ddw-transition: PREVIEW — nothing was written. The JSON above is the state to "
-              "write; the write itself goes through a `Write` of .ddw-state.json on purpose, "
-              "because that is the door PreToolUse guards. It has NOT been written yet: copy "
-              "the JSON into that Write. A shell redirect (`>`, tee, sed -i) bypasses the guard "
-              "and is refused.", file=sys.stderr)
+        print("ddw-transition: PREVIEW — nothing was written. To apply this exact validated "
+              "transition atomically, rerun this command with `--write`. Do not feed this "
+              "preview to another tool or redirect stdout onto .ddw-state.json.", file=sys.stderr)
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Emit the next .ddw-state.json for an FSM transition.")
+    ap = argparse.ArgumentParser(
+        description="Validate the next .ddw-state.json and atomically write it with --write."
+    )
     ap.add_argument("--to", default=None, help="Destination phase (CLASSIFY, DEFINE, PLAN, CODE, VERIFY, CLOSEOUT, IDLE, DISCOVERY). Omit only with --claim.")
     ap.add_argument("--action", default=None, help="Description of the transition, for the history entry.")
     ap.add_argument("--claim", action="append", default=[],
@@ -430,7 +425,10 @@ def main():
                     help="Gate to drop (repeatable). The corrective loop VERIFY->CODE clears "
                          "tests and sast: the fix has to re-earn them.")
     ap.add_argument("--tier", choices=_tiers(), default=None,
-                    help="Tier of the work (enum). The only metadata the FSM needs to route the graph.")
+                     help="Tier of the work (enum). The only metadata the FSM needs to route the graph.")
+    ap.add_argument("--direct-openspec", action="store_true",
+                    help="From CLASSIFY, implement the existing openspec/specs/ baseline directly "
+                         "without DEFINE, PLAN, or spec validation. Tests and SAST remain gated.")
     ap.add_argument("--ticket", default=None,
                     help="The ticket this run belongs to. Set it on the edge that classifies the "
                          "request; a gate cannot be claimed without one, because the ticket is "
@@ -441,7 +439,7 @@ def main():
                          "the model remembering it.")
     ap.add_argument("--tracker", default=None,
                     help="The tracker ticket this run belongs to, when there is one.")
-    ap.add_argument("--autonomy", choices=("assisted", "minimal"), default=None,
+    ap.add_argument("--autonomy", choices=("assisted", "minimal", "autonomous"), default=None,
                     help="How much of the run waits for the user. Set in CLASSIFY, with the user "
                          "looking at the box; the hook refuses a change anywhere else. Absent "
                          "leaves whatever the state carries, and absent there means assisted.")
@@ -465,6 +463,12 @@ def main():
     args = ap.parse_args()
     if args.state is None:
         args.state = _default_state()
+    if args.direct_openspec:
+        if args.to != "CODE" or args.tier not in (None, "OPENSPEC-DIRECT"):
+            ap.error("--direct-openspec requires --to CODE and no other tier")
+        args.tier = "OPENSPEC-DIRECT"
+    elif args.tier == "OPENSPEC-DIRECT":
+        ap.error("OPENSPEC-DIRECT requires --direct-openspec")
 
     block_given = args.block is not None
     block_val = None
@@ -487,8 +491,8 @@ def main():
     if args.sets:
         print(
             "ddw-transition: --set was removed (free text through shell args broke the "
-            "quoting). Use --tier <TIER> for the tier and --ticket <ID> for the ticket; "
-            "fill in title/tracker in the SAME Write where you paste the helper's output.",
+            "quoting). Use the explicit --tier, --ticket, --title and --tracker flags, "
+            "then let this helper apply the complete state with --write.",
             file=sys.stderr,
         )
         sys.exit(2)
@@ -643,6 +647,16 @@ def main():
                                  args.clear_gates, autonomy=args.autonomy, edge_clears=_clears,
                                  ticket=args.ticket, title=args.title,
                                  tracker=args.tracker)
+    if args.direct_openspec:
+        root = os.path.dirname(os.path.abspath(args.state))
+        if vt.openspec_bridge.opted_in(root):
+            try:
+                new_state["history"][-1]["baseline_digest"] = (
+                    vt.openspec_bridge.baseline_digest(root)
+                )
+            except vt.openspec_bridge.OpenSpecError as exc:
+                print(f"ddw-transition: {exc}", file=sys.stderr)
+                sys.exit(2)
 
     # A gate that rests on evidence is asked for it here too — the same function
     # the hook calls, never a second copy. This helper used to hold the only

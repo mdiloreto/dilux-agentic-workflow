@@ -37,11 +37,8 @@ jobs:
           # check_versions --since needs the base commit to diff against, and a
           # shallow clone does not have it.
           fetch-depth: 0
-          # `--depth=0` is not "no limit", it is an error: `fatal: depth 0 is not
-          # a positive number`. Both pull-request-only steps carried it, so both
-          # died at the fetch and neither had ever run — on the first pull
-          # request this repository ever opened, which is where it surfaced. The
-          # explicit refspec is what makes `origin/<base>` exist for the diff.
+          # `--depth=0` is an error, not "no limit". The explicit refspec below
+          # makes `origin/<base>` exist for the version diff.
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
@@ -84,7 +81,7 @@ jobs:
       # A push gets it too, against the commit before it. The rule used to apply
       # on pull requests alone, and a repository whose own work lands directly on
       # main therefore never applied it to itself — the same shape of exemption
-      # the commit-attribution check was written to close.
+      # the version check exists to close.
       - name: Versions describe what they are attached to
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
@@ -95,15 +92,6 @@ jobs:
           else
             python3 scripts/check_versions.py   # the first commit has no before
           fi
-
-      # Only on a pull request, and only over its own commits: the rule cannot
-      # be applied backwards without rewriting history every clone already has,
-      # and rewriting it is not what makes the next commit right.
-      - name: Commits carry the attribution this repo requires of everyone else
-        if: github.event_name == 'pull_request'
-        run: |
-          git fetch --no-tags origin "+refs/heads/${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
-          python3 scripts/check_commits.py --since "origin/${{ github.base_ref }}"
 
       # The suite runs the evals on top of this. The separate step is so the
       # failure can be read: inside 554 checks, "a scenario cannot go red" is

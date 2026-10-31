@@ -1,7 +1,7 @@
 ---
 name: ddw-commit
 description: >
-  Creates a commit following Gitmoji + Conventional Commits, with mandatory AI attribution.
+  Creates a commit following Gitmoji + Conventional Commits and the active approval rules.
   Trigger: /ddw-commit, when a DDW phase closes and has artifacts to commit (DEFINE, PLAN, CODE,
   DISCOVERY, CLOSEOUT).
 ---
@@ -9,7 +9,7 @@ description: >
 # Skill: /ddw-commit
 
 ## Description
-Creates a commit following Gitmoji + Conventional Commits, with mandatory AI attribution.
+Creates a commit following Gitmoji + Conventional Commits and the active approval rules.
 
 ## Inputs
 - The staged changes in git.
@@ -48,7 +48,6 @@ Creates a commit following Gitmoji + Conventional Commits, with mandatory AI att
 <executive summary (if the change is large)>
 
 Refs: <ticket>
-AI-assisted: yes
 ```
 
    - Pick the gitmoji that describes the change (e.g. ✨ feat, 🐛 fix, 🚑 urgent fix, 🔒

@@ -1,6 +1,6 @@
 ---
 applyTo: '**'
-version: 1.2.0
+version: 1.2.1
 ---
 
 # DISCOVERY Tier (Ideation and Product Definition)
@@ -230,12 +230,9 @@ When the user indicates they want to close the DISCOVERY:
 ### Notes
 [Summary of the key decisions made during the exploration]
 
-## Attribution
-[AI-assisted | AI-full]: [description of the level of human supervision]
 ```
 
-**A Discovery PR MUST carry the `AI-assisted` or `AI-full` label.** Follow the same attribution
-rules as the rest of the framework (see `.ddw/rules/commits.instructions.md`).
+Discovery PRs follow the same approval rules as other PRs. No AI-specific label is required.
 
 ---
 

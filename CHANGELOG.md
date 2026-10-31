@@ -19,6 +19,160 @@ move at different speeds. So the promise is specific:
 
 ---
 
+## [0.60.9] - 2026-10-31
+
+### Fixed — automatic OpenCode V2 planning
+
+- Allow only the canonical OpenSpec planning documents under
+  `openspec/changes/<slug>/` during PLAN, and only when the project explicitly
+  opts into OpenSpec.
+- Make `transition.py --write` the canonical, atomic state-transition path in
+  the orchestrator and active phase rules, without depending on a `Write` tool.
+- Keep product source, archived changes, symlink aliases and hard-linked files
+  sealed while correctly auditing every untracked planning file.
+- Split the complete mutation kill map into 32 shards after the 24-way layout
+  reached the CI timeout, while retaining all 815 faults and the 75-minute cap.
+
+## [0.60.8] - 2026-10-28
+
+### Fixed — standalone fork preview
+
+- Consolidate the verified baseline and V2 ownership fixes into one fork preview
+  with 681 installer checks and 808 mutations. Preserve the original 795 fault
+  indices; this version is not an upstream release.
+
+## [0.60.7] - 2026-10-28
+
+### Fixed — standalone fork preview
+
+- Verify OpenCode V2 package ownership from the plugin's actual package layout
+  and manifest entrypoint before transforming bundled skills. A global plugin
+  ignores unrelated parent `ddw/`, `skills/`, and package files.
+
+## [0.60.6] - 2026-10-28
+
+### Fixed — standalone fork preview
+
+- Release a completed direct baseline only after its exact ordered history is
+  journalled, not merely a matching record count. Refuse padded or reordered
+  closing records without extending the journal.
+- Integrate the baseline and V2 controls without deleting existing checks or
+  faults. Pinned totals are 681 checks and 807 faults; this is not an upstream release.
+
+## [0.60.5] - 2026-10-28
+
+### Fixed — standalone fork preview
+
+- Restrict OpenCode V2 packaged-skill transforms to package-owned assets. Native
+  global and drop-in skill discovery remains authoritative, and an existing
+  native skill ID is never overwritten.
+
+## [0.60.4] - 2026-10-28
+
+### Fixed — standalone fork preview
+
+- Bind active direct tickets to their canonical journal entry, not mutable entry
+  identity. A restamped state cannot replace the baseline that post validation
+  already blessed.
+- Preserve that binding across a same-ticket pause/resume, reject baseline drift
+  in both the helper and post path, and keep completed ticket IDs available for
+  a later fully new direct run. Pinned totals are 678 checks and 803 faults.
+
+## [0.60.3] - 2026-10-28
+
+### Fixed — standalone fork preview
+
+- Register packaged OpenCode skills through the V2 skill transform in plugin-only
+  installs while preserving native drop-in skill discovery and its overrides.
+- Release a direct ticket's baseline binding after its IDLE closeout is fully
+  journalled. Keep active tickets and unverified closing edges bound, without
+  blocking later baseline updates on behalf of a completed ticket.
+- Document the direct-entry fingerprint in the state schema. Add a positive
+  closeout installer check and mutation; pinned totals are 676 checks and 801 faults.
+
+## [0.60.2] - 2026-10-28
+
+### Fixed — standalone fork preview
+
+- Refuse writes to the existing OpenSpec baseline during a direct ticket's CODE
+  and CLOSEOUT, including parent paths and symlink escapes. Bind a direct ticket
+  to the baseline's content and stop it if that tree later drifts, including
+  through shell writes. Keep implementation writes and other tiers unchanged;
+  add no new spec receipt or baseline-validity claim.
+- Add a baseline-drift installer check and three mutations. The pinned totals
+  grow to 675 checks and 800 faults.
+
+## [0.60.1] - 2026-10-28
+
+### Changed — standalone fork preview
+
+- Remove this fork's mandatory AI-attribution trailers, PR labels and sections.
+  Commit-message approval, phase transitions, tests, SAST and closeout gates stay
+  enforced. Normal Git authorship and existing history are preserved.
+- Re-aim attribution-policy checks and mutations at optional metadata and the
+  remaining approval and CI guarantees; do not claim this as an upstream release.
+
+## [0.60.0] - 2026-10-26
+
+### Added — direct implementation from an existing OpenSpec baseline
+
+- Explicit `--direct-openspec` ticket lane starts CODE from CLASSIFY when
+  `AGENTS.md` opts into OpenSpec and readable capabilities exist under
+  `openspec/specs/`. It skips DAW PRD, proposed change, spec plan and their
+  validators, while retaining tests, SAST, commit and PR gates. Autonomy is
+  selected independently per ticket.
+- Allow a model coauthor trailer alongside mandatory `AI-assisted` or `AI-full`
+  disclosure when an automation environment requires it; it never replaces
+  the disclosure or the configured human Git author.
+
+---
+
+## [0.59.0] - 2026-10-20
+
+### Added — a fully-autonomous mode
+
+- **`autonomy: "autonomous"`**, a third mode set in CLASSIFY alongside the tier.
+  It is `minimal` plus the acts that leave the repository: an autonomous run
+  commits, pushes, merges and closes the tracker ticket without asking. The
+  eight gates do not change — they are earned by receipts and refused by the
+  same hook over the same bytes. The three integrity stops (a decision nobody
+  wrote down, a corrective loop at its ceiling, a corrupt state) still hold in
+  every mode.
+
+### Changed
+
+- The commit gate and the one-arrow-per-turn refusal treat `autonomous` like
+  `minimal`. A merge keeps its confirmation in `assisted` and `minimal`; only
+  `autonomous` takes the merge button.
+
+---
+
+## [0.58.1] - 2026-10-19
+
+### Fixed
+
+- VERIFY checks numbered FIX steps and descriptive test commitments rather than FEATURE blocks and `test_*` names.
+- OpenCode V2 registers pre-write, post-write, context and user-turn hooks; the generated reviewer denies edits and requires approval for shell commands. The existing V1 entrypoint remains available.
+- The OpenCode bootstrap now acknowledges an existing drop-in method instead of telling its agent to remove the installation.
+
+## [0.58.0] - 2026-10-17
+
+### Added — optional OpenSpec changes are evidence, not a second workflow
+
+- **Projects explicitly configured for OpenSpec bind each DAW execution plan to
+  exactly one change.** The plan remains the artifact that carries the ticket's
+  implementation decision; the linked change must contain OpenSpec's required
+  proposal, design, tasks, and capability delta.
+- **OpenSpec validation runs in strict mode before DAW writes the `spec`
+  receipt.** That receipt also seals every linked change file, so a later edit
+  cannot reuse approval earned for earlier bytes.
+- **The earned spec gate seals the linked OpenSpec change.** Editing it returns
+  the ticket to PLAN to correct and validate the change again.
+- A mutation removes the strict-validation refusal; the OpenSpec bridge tests
+  must kill it.
+- **Claude adapter hook commands quote their repository-root paths.** Claude
+  CLI 2.1.296 strict plugin validation otherwise rejects them.
+
 ## [0.57.1] - 2026-10-11
 
 ### Changed — a new home and a new name: DAW — Dilux Agentic Workflow

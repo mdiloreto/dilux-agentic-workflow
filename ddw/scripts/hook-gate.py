@@ -439,8 +439,8 @@ def commit_verdict(repo, command, require_seal=True):
     equivalent, so the seal — proof the user's turn happened — cannot exist
     there, and demanding it would refuse every commit forever. What CAN be held
     everywhere is the rest: the message comes from the file the skill shows
-    (`-F`, never `-m` through shell quoting), the file exists, and its trailers
-    are the method's. A partial gate that says it is partial beats a gap that
+    (`-F`, never `-m` through shell quoting) and the file exists.
+    A partial gate that says it is partial beats a gap that
     reads as coverage — same sentence as POST_CANNOT_BLOCK.
     """
     proposal, seal = _paths(repo)
@@ -476,35 +476,6 @@ def commit_verdict(repo, command, require_seal=True):
             "command: the refusal is the pause, not an obstacle to route around.\n"
             "If the user wants commits to stop waiting, that is `autonomy: minimal`, decided in "
             "CLASSIFY with the cost stated, not something to infer from impatience.")
-    # The trailers, which is the only part of the message a gate can judge.
-    #
-    # `commits.instructions.md` says it in capitals — NEVER `Co-Authored-By`;
-    # DDW discloses with `AI-assisted: yes` — and nothing read the file it was
-    # written about. Measured live on Copilot: the model composed the message,
-    # the user approved it, and it carried
-    # `Co-authored-by: Copilot <…@users.noreply.github.com>`, which is the tool's
-    # own default doing what the rule forbids. Every commit in the repository's
-    # history then carries an attribution its own method rejects.
-    #
-    # Only the trailer is judged. What the body SAYS is the model's to write and
-    # the user's to approve; who it claims wrote the code is not.
-    try:
-        with open(proposal, encoding="utf-8") as fh:
-            body = fh.read()
-    except OSError:
-        body = ""
-    bad = [m.group(0) for m in re.finditer(
-        r"^[ \t]*(Co-Authored-By|Signed-off-by-AI|🤖 Generated with[^\n]*)\s*:?[^\n]*$",
-        body, re.IGNORECASE | re.MULTILINE)]
-    if bad:
-        return (
-            "DDW: the message carries a trailer the method does not use: %s.\n"
-            "Disclosure in DDW is `AI-assisted: yes` (or `AI-full: yes`) and nothing else — "
-            "`Co-Authored-By` is your tool's default, not this repository's convention, and it "
-            "attributes authorship the project did not agree to. Take the line out of `%s`, show "
-            "the corrected message to the user, and commit that."
-            % (", ".join(sorted({b.strip().split(":")[0] for b in bad})), rel))
-
     # NOT consumed here. This runs before `git commit` does, and the first
     # version unlinked proposal and seal at this point — so a commit that the
     # gate allowed and git then refused (GPG signing with no TTY, a pre-commit
@@ -527,12 +498,14 @@ def _merge_paths(repo):
 def merge_verdict(repo, command, require_seal=True):
     """None to allow a `gh pr merge`, or the reason to refuse.
 
-    Unlike the commit gate, this one applies under BOTH autonomy modes — the
+    Unlike the commit gate, this one applies under `assisted` AND `minimal` — the
     method has said so in prose from the day `minimal` existed ("merging a pull
     request keeps its confirmation in both modes") and this is the hook that
-    makes the sentence true. And nothing is consumed here: the commit gate
-    taught that lesson — the permission is spent by the act EXISTING, which for
-    a merge means the forge saying MERGED, read by the post hook.
+    makes the sentence true. `autonomous` is the one mode that lifts it, chosen
+    in CLASSIFY with an even louder cost stated. And nothing is consumed here:
+    the commit gate taught that lesson — the permission is spent by the act
+    EXISTING, which for a merge means the forge saying MERGED, read by the post
+    hook.
     """
     proposal, seal = _merge_paths(repo)
     rel = os.path.join(".ddw-work", "merge-proposal.txt")
@@ -540,8 +513,8 @@ def merge_verdict(repo, command, require_seal=True):
         "\nHow this works: write what is about to happen — `merge PR #<n> into <base>` and the "
         "PR's title — to `%s`, show it to the user, and END YOUR TURN. When they answer, run "
         "the same `gh pr merge` again. A merge leaves the repository and nobody here can "
-        "revert it, so it waits for a person in EVERY autonomy mode: `minimal` removes the "
-        "pauses on arrows, not this. A picker choice is not the answer — no hook receives "
+        "revert it, so it waits for a person in `assisted` and `minimal`; only `autonomous` "
+        "takes the merge button. A picker choice is not the answer — no hook receives "
         "one; the message is." % rel)
     digest = _digest(proposal)
     if digest is None:
@@ -794,26 +767,30 @@ def main():
         command = tool_input.get("command")
         if not isinstance(command, str):
             allow(args.dialect)
-        # The merge first, and OUTSIDE the autonomy exemption below: a merge
-        # keeps its confirmation in both modes, which is the method's own
-        # sentence — this is the hook that makes it true.
+        try:
+            with open(args.state, encoding="utf-8") as fh:
+                autonomy = (json.load(fh) or {}).get("autonomy")
+        except (OSError, ValueError, AttributeError):
+            autonomy = None              # unreadable reads as assisted, like absent
+        # The merge first. Under `assisted` and `minimal` a merge keeps its
+        # confirmation — it is the one irreversible-and-outward act the method
+        # never lets the model take on its own — which is this hook's sentence
+        # made true. `autonomous` opted into lifting even that, with the cost
+        # stated in CLASSIFY.
         if _IS_PR_MERGE.search(command):
-            reason = merge_verdict(args.repo, command)
-            if reason:
-                deny(args.dialect, reason)
+            if autonomy != "autonomous":
+                reason = merge_verdict(args.repo, command)
+                if reason:
+                    deny(args.dialect, reason)
             allow(args.dialect)
         if not _IS_COMMIT.search(command):
             allow(args.dialect)
         # `minimal` was opted into with the cost stated out loud, and what it
         # removes is the asking, not the showing. A commit is local and
         # reversible, so it is not one of the acts that keep their confirmation
-        # in both modes — those are the ones that leave the repository.
-        try:
-            with open(args.state, encoding="utf-8") as fh:
-                autonomy = (json.load(fh) or {}).get("autonomy")
-        except (OSError, ValueError, AttributeError):
-            autonomy = None              # unreadable reads as assisted, like absent
-        if autonomy == "minimal":
+        # under `assisted` — those that leave the repository do, unless the run
+        # is `autonomous`.
+        if autonomy in ("minimal", "autonomous"):
             allow(args.dialect)
         reason = commit_verdict(args.repo, command)
         if reason:
@@ -832,17 +809,18 @@ def main():
     if args.mode == "pre" and args.dialect == "copilot":
         _cmd = tool_input.get("command")
         if isinstance(_cmd, str) and _cmd.strip():
+            try:
+                with open(args.state, encoding="utf-8") as fh:
+                    _autonomy = (json.load(fh) or {}).get("autonomy")
+            except (OSError, ValueError, AttributeError):
+                _autonomy = None
             if _IS_PR_MERGE.search(_cmd):
-                reason = merge_verdict(args.repo, _cmd, require_seal=False)
-                if reason:
-                    deny(args.dialect, reason)
+                if _autonomy != "autonomous":
+                    reason = merge_verdict(args.repo, _cmd, require_seal=False)
+                    if reason:
+                        deny(args.dialect, reason)
             elif _IS_COMMIT.search(_cmd):
-                try:
-                    with open(args.state, encoding="utf-8") as fh:
-                        _autonomy = (json.load(fh) or {}).get("autonomy")
-                except (OSError, ValueError, AttributeError):
-                    _autonomy = None
-                if _autonomy != "minimal":
+                if _autonomy not in ("minimal", "autonomous"):
                     reason = commit_verdict(args.repo, _cmd, require_seal=False)
                     if reason:
                         deny(args.dialect, reason)

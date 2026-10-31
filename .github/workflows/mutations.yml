@@ -116,10 +116,12 @@ jobs:
   # shipped in this repo — they were reading themselves, and surfaced by
   # accident.
   #
-  # Here and not on anyone's machine: it is 472 COMPLETE runs of the suite,
-  # without the stop at the first ✗ (which would show only the first check of
-  # each fault — the wrong question). Locally that is ~2.5 hours; split across
-  # twenty-four, fifteen minutes.
+  # Here and not on anyone's machine: it is more than eight hundred COMPLETE
+  # runs of the suite, without the stop at the first ✗ (which would show only
+  # the first check of each fault — the wrong question). Measured at 814 faults,
+  # the twenty-four-way layout reached a 70-minute median and two shards were
+  # cancelled at the 75-minute ceiling. This complete path uses thirty-two;
+  # the faster kill-rate job above remains at twenty-four.
   #
   # Where everything else runs, and not on demand. It sat seventeen pull
   # requests behind `if: workflow_dispatch`, on the argument that it answers a
@@ -130,21 +132,22 @@ jobs:
   # that could say so. A job that does not run is not a gate — which is exactly
   # the rule `--cover` applies to the mutations job, two jobs up.
   #
-  # The cost, stated and not discovered: the pull request gate goes from about
-  # twenty minutes to about forty-seven. Measured on 20-Aug-2026, not estimated.
+  # The cost is stated rather than discovered after a timeout: this complete map
+  # is the dominant pull-request gate, and its shard count owns the headroom.
   kill-map:
-    name: which checks can never fail? (shard ${{ matrix.shard }}/24)
+    name: which checks can never fail? (shard ${{ matrix.shard }}/32)
     needs: anchors
     runs-on: ubuntu-latest
-    # 75, same as the mutations job and by the same arithmetic: twenty-eight
-    # runs per shard at two minutes is fifty-six. It sat at 45 and nobody did
-    # the arithmetic, because the suite asked the question of the mutations
-    # job and of no other. The slowest shard took 38.
+    # Keep the ceiling fixed and make the work fit it. At 815 faults,
+    # thirty-two slices mean at most twenty-six faults plus the baseline. The
+    # old twenty-four-way run hit 75 minutes twice; adding slices restores the
+    # headroom instead of turning a timeout into an ever-moving target.
     timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
-        shard: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24]
+        shard: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,
+                17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -165,7 +168,7 @@ jobs:
           # The suite checks for this, and it told me so here.
           npm install -g @anthropic-ai/claude-code
       - run: |
-          python3 scripts/mutate.py --shard ${{ matrix.shard }}/24 --no-fast \
+          python3 scripts/mutate.py --shard ${{ matrix.shard }}/32 --no-fast \
                   --kill-map "kill-map-${{ matrix.shard }}.json"
       - uses: actions/upload-artifact@v7
         with:

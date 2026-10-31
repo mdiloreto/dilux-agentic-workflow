@@ -142,8 +142,8 @@ detect another active session on the same directory, say so: they will share the
 When the user wants to pause the current ticket:
 1. Save the current `.ddw-state.json` as `.ddw-paused/[ticket].ddw-state.json`.
 2. Reset `.ddw-state.json` to IDLE with
-   `.ddw/scripts/transition.py --to IDLE --action "pause: <ticket> — <reason>"`. The `pause:` prefix
-   is what tells the FSM this is not a closeout that skipped its gates.
+   `.ddw/scripts/transition.py --to IDLE --action "pause: <ticket> — <reason>" --write`. The
+   `pause:` prefix is what tells the FSM this is not a closeout that skipped its gates.
 3. Report: "Ticket [ticket] paused. You can resume it any time."
 
 When the user wants to resume a paused ticket:
@@ -175,10 +175,11 @@ When the user wants to resume a paused ticket:
 1. Does my current `phase` match `.ddw-state.json`?
 2. Is this action allowed by the router for this phase?
 3. Am I violating any prohibition?
-4. Am I transitioning `.ddw-state.json`? → Primary path: `.ddw/scripts/transition.py` → copy its
-   stdout into a `Write`. Fallback: a full-file `Write` composed by hand. **NEVER** with `Edit` (it
-   cannot touch the header and the history in one operation) and never by writing the file with
-   `Bash/jq/sed/echo` (those paths bypass PreToolUse).
+4. Am I changing `.ddw-state.json`? → Run `.ddw/scripts/transition.py ... --write`. This helper is
+   the **sanctioned exception** to the general shell-write ban: it validates the complete next
+   state, holds the state lock, writes by atomic rename, and the post-hook validates what landed.
+   Never patch, `Write`, or `Edit` the state by hand, and never redirect stdout or use
+   `jq`/`sed`/`echo` to write it.
 5. Am I writing product source? → **With `Write` or `Edit`, never with a shell command.**
    `cat >`, `echo >`, `tee`, `sed -i`, a heredoc: every one of those bypasses PreToolUse, which is
    the guard that answers whether this phase may write this file at all. A phase that is not allowed
@@ -324,25 +325,34 @@ receipts, refused by the same hook over the same bytes. What goes away is asking
 approve a transition whose evidence is already on disk, which is a rubber stamp, and rubber stamps
 are how approvals come to mean nothing.
 
+**`autonomous`** — `minimal`, plus the acts `minimal` still reserves for a person. An autonomous
+run takes every arrow AND the acts that leave the repository: it commits, pushes, merges, and closes
+the tracker ticket without asking, inheriting every `minimal` exemption the phase rules already
+name. Everything else is the same: the eight gates are earned by receipts and refused by the same
+hook over the same bytes, so a run with nobody watching is still held to the same evidence. It is
+chosen by name ("corré completamente solo", "sin preguntarme nada", "sin restricción"), never
+inferred, and its cost is stated once in CLASSIFY.
+
 **Stopping is what goes away, not only asking.** An arrow that waits for a message it does not need
-is the same interruption under another name, so under `minimal` the arrows CHAIN: one response
-carries as many as the work reaches, each written on its own, each with its evidence on disk. The
-hook agrees — `second_arrow_in_one_turn` exempts this mode from the one-arrow-per-turn
-refusal by name, and the commit gate does the same.
+is the same interruption under another name, so under `minimal` and `autonomous` the arrows CHAIN:
+one response carries as many as the work reaches, each written on its own, each with its evidence
+on disk. The hook agrees — `second_arrow_in_one_turn` exempts both modes from the
+one-arrow-per-turn refusal by name, and the commit gate does the same.
 
 **What `minimal` does NOT touch: acts that leave the repository.** Merging a pull request and
 closing a tracker ticket are not arrows in this graph — they are irreversible things done to systems
 other people read, and no receipt attests that the user wanted them. They keep their confirmation in
-both modes, and the skills that perform them say so. `minimal` removes the pause on a transition
-whose evidence is already on disk; it does not hand the model the merge button.
+`assisted` and `minimal`, and the skills that perform them say so. `minimal` removes the pause on a
+transition whose evidence is already on disk; it does not hand the model the merge button.
+`autonomous` does — that is the one thing it adds, and the one reason it is a heavier choice.
 
 **And the gates are earned by their receipts, not by the approval.** `gates.define` turns true
 because `validate_prd.py` passed and left a receipt bound to those bytes — the approval was never
 what made it true, which is why removing the approval leaves the gate chain intact. A skill that
 says "set the gate once the user approves" means "once the validation passed and you showed them";
-under `minimal` the showing still happens and the asking does not.
+under `minimal` and `autonomous` the showing still happens and the asking does not.
 
-**Stop and ask anyway, in either mode:**
+**Stop and ask anyway, in every mode:**
 
 1. **A decision nobody wrote down.** A ❌ the script names is a defect to fix; a question born of
    missing information is not. Inventing a requirement, a criterion or a threshold to clear a check
@@ -352,9 +362,10 @@ under `minimal` the showing still happens and the asking does not.
    record.
 3. **A corrupt state.** Unchanged: stop, report, repair nothing.
 
-**Every transition taken without a human carries `"autonomy": "minimal"` in its history entry.** A
-record that reads identically for a run somebody watched and one that had nobody to watch it is a
-record that lies by omission — and this is the one field that says which happened.
+**Every transition taken without a human carries `"autonomy": "minimal"` or `"autonomy":
+"autonomous"` in its history entry.** A record that reads identically for a run somebody watched
+and one that had nobody to watch it is a record that lies by omission — and this is the one field
+that says which happened.
 - DDW's skills and any the project brings coexist in `.claude/skills/`. **NEVER invoke a skill that
   is not listed in the active phase's router**, whether it belongs to DDW or to the project. If the
   project ships a skill with the SAME name as one of DDW's, that is ambiguous: tell the user and ask
@@ -472,12 +483,20 @@ refusing to ship.
   `/ddw-commit`, `/ddw-self-check`, `/ddw-status`
 - **Agents:** `ddw-implementer`, `ddw-module-verifier`, `ddw-arch-auditor`, `ddw-sec-auditor`
 - **Blocked:** modifying the PRD. Modifying specs. Committing before tests+SAST are green. PRs.
-- **Status line:** `💻 {TIER} · Implementing [3/5] · Block {n}/{total} | {ticket}: {title}`
+- **Status line:** `💻 {TIER} · Implementing [3/5] · Block {n}/{total} | {ticket}: {title}` for FEATURE; `💻 OPENSPEC-DIRECT · Implementing | {ticket}: {title}` in the direct lane.
 - **FIRST action:** `/ddw-validate-arch` BEFORE writing code.
-- **Per block:** dispatch `ddw-implementer`, then review in two stages (`ddw-module-verifier` for
+- **Per FEATURE block:** dispatch `ddw-implementer`, then review in two stages (`ddw-module-verifier` for
   spec compliance, `ddw-arch-auditor` for quality). Details in `.ddw/rules/code.instructions.md`.
 - **On finishing:** `/ddw-test` → PASS + `/ddw-security-sast` → PASS (BLOCKING GATE).
-- **Exit:** `tests` and `sast` gates present + user confirms (not under `minimal` — see § Autonomy) → `phase`→`VERIFY`.
+- **Exit:** `tests` and `sast` gates present + user confirms (not under `minimal` — see § Autonomy) → `phase`→`VERIFY` for FEATURE/FIX or `CLOSEOUT` for OPENSPEC-DIRECT.
+
+**When tier is `OPENSPEC-DIRECT`:** read every `openspec/specs/*/spec.md`, inventory
+implemented versus outstanding requirements and implement only the ticket's
+selected slice. Skip DEFINE, PLAN and VERIFY: no DAW PRD, proposed OpenSpec
+change, DAW execution spec, spec validator or module-verifier is owed. Use the
+direct-tier section of `code.instructions.md`; keep `ddw-validate-arch`,
+`ddw-test` and `ddw-security-sast`. The graph permits CODE→CLOSEOUT only after
+the `tests` and `sast` gates. Do not claim `define`, `spec`, `threat` or `verify`.
 
 ---
 
@@ -582,24 +601,22 @@ Status line: `⚡ QUICK-FIX · {action} | {ticket}: {title}` (no 5-phase numberi
 3. **Every change to `.ddw-state.json` → an entry in `history`, per the schema in
    `.ddw/rules/state.instructions.md`.** **Append-only:** the new entry ALWAYS goes at the **end**
    of the array — never prepend, reorder or mutate previous entries. **Atomic — `transition.py`
-   helper (primary) or a full `Write` (fallback):** `phase`, the corresponding `gate` and the
-   `history` entry all go in **a single write**. Primary path: run
+   is the only write path:** `phase`, the corresponding `gate` and the `history` entry all land in
+   **a single write**. Run
    `.ddw/scripts/transition.py --to <PHASE> --action "<reason>" [--gate <g>...] [--tier <TIER>]
-   [--ticket <ID>]` (once per transition) and copy its stdout into a `Write` of the state. `--tier`
-   (an enum) and `--ticket` are the metadata the helper sets — **set the ticket on the edge that
-   classifies the request**, because a gate cannot be claimed without one: the ticket is how every
-   receipt finds its document. `title`/`tracker` you fill in the SAME `Write`. Fallback:
-   compose the full-file `Write` by hand (header + history together). **NEVER** transition the state
-   with `Edit` (it cannot touch the header at the top and append to history at the end in one
-   operation) or with `Bash/jq/sed/echo` (those writes bypass PreToolUse). `Edit` is only valid for
-   in-phase updates that do NOT change `phase`. **Shape:** `{timestamp, from, to, action, ticket,
+   [--ticket <ID>] [--title <TITLE>] [--tracker <ID>] --write` once per transition. `--tier`
+   (an enum) and the explicit metadata flags are applied by the helper — **set the ticket on the
+   edge that classifies the request**, because a gate cannot be claimed without one: the ticket is
+   how every receipt finds its document. The helper invocation is the sanctioned exception for
+   shell writes; no redirect, `jq`, `sed`, `echo`, `Write`, `Edit`, or patch may mutate the state.
+   **Shape:** `{timestamp, from, to, action, ticket,
    tier}` — `from`/`to`/`action` are required even on resets or abandons to IDLE, and `ticket`/`tier`
    are what make the entry attributable after a closeout wipes them from the header (the helper
    stamps both; see `.ddw/rules/state.instructions.md`). No other keys.
    (The `validate-state-transition.sh` hook rejects prepends, truncation and phase changes without
    an entry; `validate-state-postwrite.sh` (PostToolUse) revalidates the state on disk and blocks
-   illegal transitions written by any path, including Bash — but get it right the first time with
-   Write.)
+   illegal transitions written by any path, including Bash — but the helper prevents a partial or
+   hand-built state from being attempted.)
 4. **Corrupt state → STOP and report.** Do not self-repair.
 5. **`/ddw-status`, `/ddw-self-check`, `/ddw-context-check` and `/ddw-help`** are available in EVERY
    phase. None of them writes to the state or sets a gate.
