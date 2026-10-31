@@ -142,8 +142,8 @@ detect another active session on the same directory, say so: they will share the
 When the user wants to pause the current ticket:
 1. Save the current `.ddw-state.json` as `.ddw-paused/[ticket].ddw-state.json`.
 2. Reset `.ddw-state.json` to IDLE with
-   `.ddw/scripts/transition.py --to IDLE --action "pause: <ticket> — <reason>"`. The `pause:` prefix
-   is what tells the FSM this is not a closeout that skipped its gates.
+   `.ddw/scripts/transition.py --to IDLE --action "pause: <ticket> — <reason>" --write`. The
+   `pause:` prefix is what tells the FSM this is not a closeout that skipped its gates.
 3. Report: "Ticket [ticket] paused. You can resume it any time."
 
 When the user wants to resume a paused ticket:
@@ -175,10 +175,11 @@ When the user wants to resume a paused ticket:
 1. Does my current `phase` match `.ddw-state.json`?
 2. Is this action allowed by the router for this phase?
 3. Am I violating any prohibition?
-4. Am I transitioning `.ddw-state.json`? → Primary path: `.ddw/scripts/transition.py` → copy its
-   stdout into a `Write`. Fallback: a full-file `Write` composed by hand. **NEVER** with `Edit` (it
-   cannot touch the header and the history in one operation) and never by writing the file with
-   `Bash/jq/sed/echo` (those paths bypass PreToolUse).
+4. Am I changing `.ddw-state.json`? → Run `.ddw/scripts/transition.py ... --write`. This helper is
+   the **sanctioned exception** to the general shell-write ban: it validates the complete next
+   state, holds the state lock, writes by atomic rename, and the post-hook validates what landed.
+   Never patch, `Write`, or `Edit` the state by hand, and never redirect stdout or use
+   `jq`/`sed`/`echo` to write it.
 5. Am I writing product source? → **With `Write` or `Edit`, never with a shell command.**
    `cat >`, `echo >`, `tee`, `sed -i`, a heredoc: every one of those bypasses PreToolUse, which is
    the guard that answers whether this phase may write this file at all. A phase that is not allowed
@@ -600,24 +601,22 @@ Status line: `⚡ QUICK-FIX · {action} | {ticket}: {title}` (no 5-phase numberi
 3. **Every change to `.ddw-state.json` → an entry in `history`, per the schema in
    `.ddw/rules/state.instructions.md`.** **Append-only:** the new entry ALWAYS goes at the **end**
    of the array — never prepend, reorder or mutate previous entries. **Atomic — `transition.py`
-   helper (primary) or a full `Write` (fallback):** `phase`, the corresponding `gate` and the
-   `history` entry all go in **a single write**. Primary path: run
+   is the only write path:** `phase`, the corresponding `gate` and the `history` entry all land in
+   **a single write**. Run
    `.ddw/scripts/transition.py --to <PHASE> --action "<reason>" [--gate <g>...] [--tier <TIER>]
-   [--ticket <ID>]` (once per transition) and copy its stdout into a `Write` of the state. `--tier`
-   (an enum) and `--ticket` are the metadata the helper sets — **set the ticket on the edge that
-   classifies the request**, because a gate cannot be claimed without one: the ticket is how every
-   receipt finds its document. `title`/`tracker` you fill in the SAME `Write`. Fallback:
-   compose the full-file `Write` by hand (header + history together). **NEVER** transition the state
-   with `Edit` (it cannot touch the header at the top and append to history at the end in one
-   operation) or with `Bash/jq/sed/echo` (those writes bypass PreToolUse). `Edit` is only valid for
-   in-phase updates that do NOT change `phase`. **Shape:** `{timestamp, from, to, action, ticket,
+   [--ticket <ID>] [--title <TITLE>] [--tracker <ID>] --write` once per transition. `--tier`
+   (an enum) and the explicit metadata flags are applied by the helper — **set the ticket on the
+   edge that classifies the request**, because a gate cannot be claimed without one: the ticket is
+   how every receipt finds its document. The helper invocation is the sanctioned exception for
+   shell writes; no redirect, `jq`, `sed`, `echo`, `Write`, `Edit`, or patch may mutate the state.
+   **Shape:** `{timestamp, from, to, action, ticket,
    tier}` — `from`/`to`/`action` are required even on resets or abandons to IDLE, and `ticket`/`tier`
    are what make the entry attributable after a closeout wipes them from the header (the helper
    stamps both; see `.ddw/rules/state.instructions.md`). No other keys.
    (The `validate-state-transition.sh` hook rejects prepends, truncation and phase changes without
    an entry; `validate-state-postwrite.sh` (PostToolUse) revalidates the state on disk and blocks
-   illegal transitions written by any path, including Bash — but get it right the first time with
-   Write.)
+   illegal transitions written by any path, including Bash — but the helper prevents a partial or
+   hand-built state from being attempted.)
 4. **Corrupt state → STOP and report.** Do not self-repair.
 5. **`/ddw-status`, `/ddw-self-check`, `/ddw-context-check` and `/ddw-help`** are available in EVERY
    phase. None of them writes to the state or sets a gate.

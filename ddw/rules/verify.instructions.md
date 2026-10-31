@@ -1,6 +1,6 @@
 ---
 applyTo: '**'
-version: 2.0.0
+version: 2.1.0
 ---
 
 # Phase 4: VERIFY
@@ -32,7 +32,7 @@ Read `.ddw-state.json.tier` to determine your behavior.
    - **Go back to the CODE phase:** update `.ddw-state.json` with `phase` → `"CODE"`. Clear the
      invalidated gates with
      `.ddw/scripts/transition.py --to CODE --action "corrective loop: <reason>" --clear-gate tests
-     --clear-gate sast --clear-gate verify` — the fix has to re-earn them. Tell the user:
+     --clear-gate sast --clear-gate verify --write` — the fix has to re-earn them. Tell the user:
      "Verification found problems. Going back to CODE to fix them."
    - After fixing in CODE and passing its gates (tests + SAST), transition back to VERIFY.
 3. If it PASSES → `gates.verify` = `true`.

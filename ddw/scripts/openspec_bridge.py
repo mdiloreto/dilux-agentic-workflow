@@ -22,6 +22,11 @@ _CHANGE_PATH = re.compile(
 )
 _FRAMEWORK_HEADING = re.compile(r"^## Specification framework$", re.MULTILINE)
 _FORMAT = re.compile(r"^Spec format: OpenSpec$", re.MULTILINE)
+_PLAN_ARTIFACT = re.compile(
+    r"openspec/changes/(?!archive/)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?/"
+    r"(?:proposal\.md|design\.md|tasks\.md|"
+    r"specs/[a-z0-9](?:[a-z0-9-]*[a-z0-9])?/spec\.md)"
+)
 
 
 class OpenSpecError(ValueError):
@@ -126,6 +131,11 @@ def opted_in(root: str) -> bool:
     )
     section = text[heading.end() : body_end]
     return bool(_FORMAT.search(section))
+
+
+def is_plan_artifact(root: str, rel: str) -> bool:
+    """Recognize only the OpenSpec documents required before plan validation."""
+    return bool(_PLAN_ARTIFACT.fullmatch(rel)) and opted_in(root)
 
 
 def change_path(root: str, spec_text: str) -> str | None:

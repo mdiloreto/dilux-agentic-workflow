@@ -19,6 +19,18 @@ move at different speeds. So the promise is specific:
 
 ---
 
+## [0.60.9] - 2026-10-31
+
+### Fixed — automatic OpenCode V2 planning
+
+- Allow only the canonical OpenSpec planning documents under
+  `openspec/changes/<slug>/` during PLAN, and only when the project explicitly
+  opts into OpenSpec.
+- Make `transition.py --write` the canonical, atomic state-transition path in
+  the orchestrator and active phase rules, without depending on a `Write` tool.
+- Keep product source, archived changes, symlink aliases and hard-linked files
+  sealed while correctly auditing every untracked planning file.
+
 ## [0.60.8] - 2026-10-28
 
 ### Fixed — standalone fork preview

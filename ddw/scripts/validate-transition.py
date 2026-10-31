@@ -109,8 +109,8 @@ def _reconstruct_new_text(tool_name, tool_input, old_text):
     # that does not name the door it is pointing at is a puzzle, and the least
     # obedient models solve puzzles by looking for the wall's weakest brick.
     _HELPER = (" The state is not edited by hand: run `.ddw/scripts/transition.py --to <phase> "
-               "--action \"…\" --write` (or `--claim <gate>` / `--block N/M`), which validates "
-               "and writes it atomically itself.")
+               "--action \"…\" --write` (or `--claim <gate> --write` / `--block N/M "
+               "--write`), which validates and writes it atomically itself.")
     if tool_name == "Edit":
         old_s = tool_input.get("old_string")
         new_s = tool_input.get("new_string")
@@ -632,8 +632,8 @@ def _check_the_ticket_has_a_name(new_state, appended, replaying=False):
     if not (isinstance(title, str) and title.strip()):
         raise Block(
             "this edge leaves CLASSIFY with a ticket and no `title`. The name is decided here "
-            "and nowhere else: pass `--title \"<one line>\"` on the same run that sets "
-            "`--ticket`, or put both in the same Write. A state that names no work makes every "
+            "and nowhere else: pass `--title \"<one line>\"` on the same helper run that sets "
+            "`--ticket`, ending it with `--write`. A state that names no work makes every "
             "line the user reads afterwards a reconstruction from context."
         )
 
@@ -1078,26 +1078,18 @@ def validate(old_state, new_state, graph, tool_name=None, max_appended=1,
     # No transition: an in-phase update. Only valid if the phase did not change.
     if not appended:
         if new_phase != old_phase:
-            core = (
-                f"the phase changed {old_phase}→{new_phase} but you did not add the matching "
-                "history entry. In the SAME write that changes `phase`, append a "
-                "{timestamp, from, to, action} entry at the END of the `history` array."
+            edit_hint = (
+                " An Edit cannot update the phase and append its history entry atomically."
+                if tool_name == "Edit"
+                else ""
             )
-            if tool_name == "Edit":
-                hint = (
-                    " An Edit cannot change the header (at the top) and append to history "
-                    "(at the end) in a single operation: use a Write of the whole file "
-                    "(header + history together), not an Edit."
-                )
-            elif tool_name == "Write":
-                hint = (
-                    " Your Write changed `phase` but the `history` array is missing the new "
-                    "entry — add it at the end and rewrite the file. (The helper "
-                    ".ddw/scripts/transition.py builds the correct JSON for you.)"
-                )
-            else:
-                hint = ""
-            raise Block(core + hint)
+            raise Block(
+                f"the phase changed {old_phase}→{new_phase} but the matching history entry is "
+                f"missing.{edit_hint} Do not repair the JSON by hand: run "
+                f"`.ddw/scripts/transition.py --to {new_phase} --action \"<reason>\" --write` "
+                "from the unchanged state; the helper appends the entry and writes both parts "
+                "atomically."
+            )
         return  # in-phase update (gates, block, discovery): allowed
 
     # With a transition: validate the chain of appended entries.
@@ -1653,6 +1645,16 @@ def source_write_denied(target, root, phase):
     if rel in ALLOWED_ROOT_FILES:
         return None
     if any(rel.startswith(pre) for pre in ALLOWED_DIR_PREFIXES):
+        return None
+    if phase == "PLAN" and openspec_bridge.is_plan_artifact(root, rel):
+        try:
+            links = os.stat(target, follow_symlinks=False).st_nlink
+        except FileNotFoundError:
+            return None
+        except OSError:
+            return f"cannot inspect `{rel}` for hard links; refusing the write"
+        if links != 1:
+            return f"`{rel}` has multiple hard links; refusing the write during PLAN"
         return None
 
     if phase == IDLE:
@@ -2834,7 +2836,8 @@ def _read_state_or_refuse(state_path):
     except (OSError, ValueError) as exc:
         raise Block(
             f".ddw-state.json exists but cannot be read ({exc}). Restore it from the last "
-            "good version and redo the transition with the write tool."
+            "good version only through the explicit recovery process, then redo the transition "
+            "with `.ddw/scripts/transition.py ... --write`."
         )
     return text, parsed
 
@@ -3775,8 +3778,9 @@ def source_changed_in_no_source_phase(repo, phase):
     if phase not in NO_SOURCE_PHASES:
         return None
     try:
-        out = subprocess.run(["git", "-C", repo, "status", "--porcelain"],
-                             capture_output=True, text=True, timeout=10)
+        out = subprocess.run(
+            ["git", "-C", repo, "status", "--porcelain", "--untracked-files=all"],
+            capture_output=True, text=True, timeout=10, check=False)
     except (OSError, subprocess.SubprocessError):
         return None                      # no git, or it is not answering: not ours to guess
     if out.returncode != 0:
@@ -3793,12 +3797,10 @@ def source_changed_in_no_source_phase(repo, phase):
         path = path.strip().strip('"')
         if not path or path.rstrip("/").split("/", 1)[0] in _NOT_PRODUCT:
             continue
-        # git reports an untracked DIRECTORY as `docs/`, with the slash. Resolved
-        # to a path it becomes `docs`, which does not start with `docs/` — so the
-        # allowlist missed it and every artifact directory read as product source.
-        # Probing the directory itself keeps the prefix intact.
-        probe = path if path.endswith("/") else path
-        target = resolve_in_repo(probe.rstrip("/") + ("/x" if path.endswith("/") else ""), root)
+        # Keep the prefix intact for entries Git still reports as directories.
+        target = resolve_in_repo(
+            path.rstrip("/") + ("/x" if path.endswith("/") else ""), root
+        )
         if target and source_write_denied(target, root, phase):
             hits.append(path)
         if len(hits) > 5:
@@ -4096,9 +4098,9 @@ def _run_post(args):
             sys.exit(2)
         print(
             "DDW FSM found an ILLEGAL .ddw-state.json on disk: "
-            f"{exc}. You probably wrote it with Bash/jq/sed (which bypass the "
-            "PreToolUse hook). Fix the state and redo the transition with the Write "
-            "tool (whole file: header + history), NEVER with Bash.",
+            f"{exc}. STOP and report the corrupt state; do not edit or rewrite it by hand. "
+            "Normal transitions use `.ddw/scripts/transition.py ... --write`, which refuses "
+            "corrupt input rather than guessing a repair.",
             file=sys.stderr,
         )
         sys.exit(2)

@@ -1,6 +1,6 @@
 ---
 applyTo: '**'
-version: 2.21.0
+version: 2.22.0
 ---
 
 # CLASSIFY Phase (Recognition and Classification)
@@ -16,15 +16,12 @@ Write `IDLE → CLASSIFY` **before any classification work**, in the same respon
 user's request:
 
 ```bash
-.ddw/scripts/transition.py --to CLASSIFY --action "clasificar: <the request, in a few words>"
+.ddw/scripts/transition.py --to CLASSIFY --action "clasificar: <the request, in a few words>" --write
 ```
 
-**The helper PRINTS the next state; it does not write it.** Copy its stdout into a `Write` of
-`.ddw-state.json` — that `Write` is the transition, and it is what PreToolUse judges. Running the
-command and moving on leaves the phase where it was: measured live, a model read back a state
-saying `"phase": "CLASSIFY"`, announced the pipeline had advanced, and on disk the phase was still
-IDLE with an empty history. The helper now says so on stderr; this line is here because the phase
-rule is what gets loaded, and a warning only reaches whoever runs the command.
+**`--write` is the transition.** The helper validates the complete next state, holds the state
+lock, and replaces the file atomically. Without the flag it only previews JSON and explicitly says
+nothing landed; do not copy that preview into another tool or redirect it onto the state file.
 
 **A second ticket while one is in flight opens its own worktree, not a negotiation.** When the
 state already carries a mid-phase ticket and the new request is not about it, the choice is never
@@ -319,7 +316,7 @@ Entering is a transition like any other (`CLASSIFY→FREE`), so the history says
 why — and it carries **the user's own words**:
 
 ```bash
-.ddw/scripts/transition.py --to FREE --tier FREE --action 'free: "<the sentence in which they asked for it>"'
+.ddw/scripts/transition.py --to FREE --tier FREE --action 'free: "<the sentence in which they asked for it>"' --write
 ```
 
 The gate refuses the arrow without them. That is not bookkeeping: this tier buys the absence of
@@ -532,16 +529,15 @@ somebody watched from one that did not have anyone to watch it.
 
    ```bash
    .ddw/scripts/transition.py --to DEFINE --tier <TIER> --ticket <ID> \
-       --title "<the ticket's name, one line>" --action "<why this tier>"
+       --title "<the ticket's name, one line>" --action "<why this tier>" --write
    ```
 
    For the direct OpenSpec tier use `--to CODE --direct-openspec` instead of
    `--to DEFINE --tier <TIER>`. The helper and hook both require the OpenSpec
    opt-in and a readable baseline; the option is not a global bypass.
 
-   It prints the complete next state and self-validates against the graph first, so an illegal
-   transition fails here rather than being refused by the hook afterwards. Paste its output in a
-   single write.
+   It builds the complete next state, self-validates against the graph, and atomically writes only
+   after validation, so an illegal transition fails without changing the file.
 
    `--title` is not optional here and the FSM refuses this edge without it: the name is decided
    in CLASSIFY and nowhere else, and a state that names no work makes every status line, report
@@ -555,7 +551,7 @@ somebody watched from one that did not have anyone to watch it.
 
    ```bash
    .ddw/scripts/transition.py --to FREE --tier FREE --ticket <ID> \
-       --title "<the ticket's name, one line>" --action 'free: "<what the user actually said>"'
+       --title "<the ticket's name, one line>" --action 'free: "<what the user actually said>"' --write
    ```
 
    You do not get to paraphrase that into existence. FREE is the tier the user has to ask for,
