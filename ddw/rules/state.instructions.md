@@ -1,6 +1,6 @@
 ---
 applyTo: '**'
-version: 2.7.0
+version: 2.10.0
 ---
 
 # State — Schema and Management of `.ddw-state.json`
@@ -30,12 +30,12 @@ version: 2.7.0
 
 | Field | Type | Valid values | Description |
 |-------|------|--------------|-------------|
-| `tier` | `string \| null` | `"QUICK-FIX"`, `"FIX"`, `"FEATURE"`, `"DISCOVERY"`, `"FREE"`, `null` | Tier of the current work. `null` in IDLE. |
+| `tier` | `string \| null` | `"QUICK-FIX"`, `"FIX"`, `"FEATURE"`, `"OPENSPEC-DIRECT"`, `"DISCOVERY"`, `"FREE"`, `null` | Tier of the current work. `null` in IDLE. `OPENSPEC-DIRECT` is an explicit existing-baseline implementation lane: CLASSIFY→CODE→CLOSEOUT, with tests and SAST still required. |
 | `phase` | `string` | `"IDLE"`, `"CLASSIFY"`, `"DEFINE"`, `"PLAN"`, `"CODE"`, `"VERIFY"`, `"CLOSEOUT"`, `"DISCOVERY"`, `"FREE"` | Current phase of the state machine. |
 | `ticket` | `string \| null` | Tracker ID (e.g. `"PROJ-123"`) or internal (e.g. `"FIX-001"`, `"FEAT-001"`, `"DISC-001"`) | The ticket identifier. `null` in IDLE. |
 | `title` | `string \| null` | Free text | Descriptive title of the ticket. `null` in IDLE. |
 | `tracker` | `string \| null` | The tracker's ID | Set when the ticket comes from a tracker. `null` when the ID is internal. |
-| `autonomy` | `string \| null` | `"assisted"`, `"minimal"`, `null` | How much of the pipeline runs without being asked. Set in CLASSIFY, alongside the tier. **Absent or `null` means `assisted`** — a state written before this field existed is not a state that opted into anything. |
+| `autonomy` | `string \| null` | `"assisted"`, `"minimal"`, `"autonomous"`, `null` | How much of the pipeline runs without being asked. Set in CLASSIFY, alongside the tier, and resolved again only when a real paused ticket resumes. **Absent or `null` means `assisted`** — a state written before this field existed is not a state that opted into anything. |
 | `gates` | `object` | `{"spec": true, …}` | The gates earned in the current phase. A transition reads them; it never trusts a promise. |
 | `block` | `string \| null` | Free text | Which block of the spec is being implemented (CODE phase). |
 | `discovery` | `object \| null` | Free object | DISCOVERY's working notes. |
@@ -184,7 +184,21 @@ bytes. What it removes is the confirmation on a transition whose evidence is alr
 because asking a person to approve what a receipt already attests is asking them to rubber-stamp,
 and a rubber stamp teaches people that approvals mean nothing.
 
-**Three things stop the pipeline in `minimal` anyway, and they are not configurable:**
+`autonomous` is `minimal` plus the acts that leave the repository: it commits, pushes, merges and
+closes the tracker ticket without asking. The gates do not change — the eight receipts are still
+required and refused by the same hook over the same bytes. What it removes is the last confirmation,
+the one `minimal` still reserves for a person. Its cost is stated once in CLASSIFY, and it is never
+inferred.
+
+A pause clears `autonomy` from the live IDLE header so the next ticket cannot inherit it; it does
+not erase the mode persisted for the same paused ticket. When the user explicitly resumes that
+ticket, an exact `autonomous` value in both its saved snapshot and its latest unresolved pause entry
+is restored without reconfirmation. That is continuation of an authorization already recorded, not
+inference. `assisted`, `minimal`, and an absent value remain a choice at resume, and disagreement
+between the two records is corrupt state — never a reason to select the more permissive one.
+
+**Three things stop the pipeline in `minimal` and `autonomous` anyway, and they are not
+configurable:**
 
 1. **A decision nobody wrote down.** A ❌ the script names is a defect to fix; a question that comes
    from missing information is not. Inventing a requirement to clear a check is a worse defect than
@@ -192,9 +206,10 @@ and a rubber stamp teaches people that approvals mean nothing.
 2. **The corrective loop hitting its ceiling.** `PRD loops`, `Spec loops` and the CODE phase's three
    attempts are the counters; reaching one means the automatic path has been tried and did not
    converge, and the run stops with what it tried in the record.
-3. **A corrupt state.** Already true in both modes, for the reasons decision 14 gives.
+3. **A corrupt state.** True in every mode, for the reasons decision 14 gives.
 
-Every transition taken without a human carries `"autonomy": "minimal"` in its history entry. Six
+Every transition taken without a human carries `"autonomy": "minimal"` or `"autonomy":
+"autonomous"` in its history entry. Six
 months later the record has to distinguish a run somebody watched from one that went through at
 three in the morning, and a `history` that reads identically for both is a record that lies by
 omission.

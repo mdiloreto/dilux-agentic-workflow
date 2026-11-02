@@ -30,7 +30,7 @@ set -uo pipefail
 # a knob anyone could turn from outside the file. `docs/AI-POLICY.md` and
 # `CONTRIBUTING.md` both name this variable as the thing not to soften; it was
 # softenable without editing the file they were talking about.
-EXPECT_CHECKS=671
+EXPECT_CHECKS=675
 EXPECT_SKILLS=20
 EXPECT_AGENTS=5
 EXPECT_RULES=14
@@ -40,7 +40,7 @@ EXPECT_ADAPTERS=6
 # `--check-anchors`, `--cover` and every check in this file green, and the
 # published percentage went on being a percentage of a smaller list. The same
 # reason `EXPECT_CHECKS` exists, one file over.
-EXPECT_MUTATIONS=785
+EXPECT_MUTATIONS=802
 
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # EXPORTED, because the Python blocks below anchor their own temporary
@@ -735,7 +735,15 @@ PYTIERS
 # that never reach the total this file pins.
 for PAIR in $TIER_DESTS; do
   TIER="${PAIR%%:*}"; DEST="${PAIR##*:}"
-  python3 "$TR" --to CLASSIFY --action req --ticket T-1 --graph "$G" > "$R/.ddw-state.json" 2>/dev/null
+  ST="$R/.ddw-state.json"
+  if [ "$TIER" = "OPENSPEC-DIRECT" ]; then
+    D="$R/direct-baseline"
+    mkdir -p "$D/openspec/specs/payments"
+    printf '## Specification framework\nSpec format: OpenSpec\n' > "$D/AGENTS.md"
+    printf '# Payments\n' > "$D/openspec/specs/payments/spec.md"
+    ST="$D/.ddw-state.json"
+  fi
+  python3 "$TR" --to CLASSIFY --action req --ticket T-1 --graph "$G" --state "$ST" > "$ST" 2>/dev/null
   # FREE is the one tier whose edge costs the user's own words, quoted. Every
   # other tier takes any action at all, and that asymmetry is the point: the
   # loop would pass just as well with `free: "…"` everywhere, and then nothing
@@ -743,7 +751,9 @@ for PAIR in $TIER_DESTS; do
   # has to ask for.
   CACT=c
   [ "$TIER" = "FREE" ] && CACT='free: "hacelo sin pipeline, me hago cargo"'
-  if python3 "$TR" --to "$DEST" --action "$CACT" --tier "$TIER" --title "the fixture ticket" --graph "$G" >/dev/null 2>&1; then
+  TIER_ARGS=(--tier "$TIER")
+  [ "$TIER" = "OPENSPEC-DIRECT" ] && TIER_ARGS=(--direct-openspec)
+  if python3 "$TR" --to "$DEST" --action "$CACT" "${TIER_ARGS[@]}" --title "the fixture ticket" --graph "$G" --state "$ST" >/dev/null 2>&1; then
     ok "tier $TIER: CLASSIFY->$DEST accepted"
   else
     bad "tier $TIER: CLASSIFY->$DEST REJECTED"
@@ -3156,18 +3166,18 @@ assert not blocked(st("CLASSIFY", None), st("CLASSIFY", "minimal")), \
 assert not blocked(st("DEFINE", "minimal"), st("PLAN", "minimal", NXT, {"define": True})), \
     "an ordinary transition under minimal is refused"
 
-# Resuming is the one other moment the mode is chosen. Without it the setting is
-# simply lost across a pause — reaching IDLE clears it, and the only way back
-# would be abandoning the ticket. It is narrow because a resume cannot be
-# manufactured: it needs a real, unresumed pause of this ticket, from the exact
-# phase being re-entered.
+# Resuming is the one other moment the mode is restored or chosen. Without it the
+# setting is simply lost across a pause — reaching IDLE clears it, and the only
+# way back would be abandoning the ticket. It is narrow because a resume cannot
+# be manufactured: it needs a real, unresumed pause of this ticket, from the
+# exact phase being re-entered.
 PAUSED = H + [{"timestamp": "2026-01-01T00:03:00Z", "from": "DEFINE", "to": "IDLE",
                "action": "pause: waiting on product", "ticket": "T-1", "tier": "FEATURE",
                "autonomy": "minimal"}]
 BACK = PAUSED + [{"timestamp": "2026-01-01T02:00:00Z", "from": "IDLE", "to": "DEFINE",
                   "action": "resume: back to it", "ticket": "T-1", "tier": "FEATURE"}]
 idle_after = st(IDLE_PHASE := "IDLE", None, PAUSED, tier=None, ticket=None)
-for answer in ("minimal", "assisted"):
+for answer in ("minimal", "assisted", "autonomous"):
     assert not blocked(idle_after, st("DEFINE", answer, BACK)), \
         f"resuming and answering {answer!r} about the mode is refused"
 # …and it is still an enum, and still not a door anywhere else.
@@ -3181,16 +3191,19 @@ assert blocked(st("PLAN", "assisted", NXT, {"define": True}),
                   {"define": True, "spec": True, "threat": True})), \
     "the word resume on an ordinary forward edge sets the mode — it is a skeleton key again"
 
-# The hook can prove a pause is being resumed. It cannot prove a question was
-# put — so that stop lives in the method, and a stop that lives in prose has to
-# be checked as prose or it quietly stops existing.
+# The hook can prove a pause is being resumed. It cannot prove whether the
+# persisted mode was restored or a person chose another one, so that distinction
+# lives in the method and has to be checked as prose or it quietly disappears.
 protocol = open(os.path.join(src, "ddw/orchestrator.md"), encoding="utf-8").read()
 start = protocol.find("When the user wants to resume a paused ticket")
 assert start > 0, "the pause protocol no longer says how to resume"
-resume_protocol = protocol[start:start + 2000].lower()
-for phrase in ("ask about the mode", "autonomy"):
+resume_protocol = " ".join(protocol[start:start + 3000].lower().split())
+for phrase in (
+        'if the saved mode is exactly `"autonomous"`, restore it without asking',
+        'for `"assisted"`, `"minimal"`, or an absent mode, ask which mode to use',
+        'do not infer `"autonomous"`'):
     assert phrase in resume_protocol, \
-        f"the resume protocol never says to {phrase!r}: the mode comes back with nobody deciding"
+        f"the resume protocol lost its mode boundary: {phrase!r}"
 PYAUTO
 
 # And the sanctioned helper has to be able to write what the method promises:
@@ -3904,6 +3917,36 @@ VTFOUT="$(python3 "$SELF/ddw/scripts/validate_tests.py" "$VP/docs/ddw/reports/te
 case "$VTFOUT" in
   *"❌ F-TEST-04"*"under the floor"*61*) ok "and coverage under the quoted floor is named with its number" ;;
   *) bad "61% line coverage passed a report quoting an 80% floor" ;;
+esac
+
+# Go's native counter measures statements. A project with no declared floor
+# owes the number and the runner line, never fabricated branch percentages.
+GOV="$WORK/go-coverage"; mkdir -p "$GOV/docs/ddw/reports"
+printf '## Testing\nCoverage floor — line: N/A — no project floor declared.\n' > "$GOV/AGENTS.md"
+cat > "$GOV/docs/ddw/reports/tests-GO-1.md" <<'GOCOVER'
+| Runner | Go 1.26 (go test) |
+| Command | go test ./internal/... -cover -count=1 |
+| Total | 42 |
+| Passed | 42 |
+| Failed | 0 |
+| Skipped | 0 |
+| Line coverage | N/A — Go reports statements |
+| Branch coverage | N/A — no branch instrumentation |
+| Function coverage | N/A — not measured |
+| Statement coverage | 70.8% |
+| Coverage scope | internal/ledger |
+| Go coverage output | coverage: 70.8% of statements |
+| Coverage floor | N/A — AGENTS.md §Testing |
+GOCOVER
+python3 "$SELF/ddw/scripts/validate_tests.py" "$GOV/docs/ddw/reports/tests-GO-1.md" >/dev/null 2>&1 \
+  && ok "Go statement coverage is reported without inventing a floor for a project declaring none" \
+  || bad "Go's measured statement coverage was refused as missing line, branch and function metrics"
+sed 's/coverage: 70.8% of statements/coverage: 91.0% of statements/' \
+  "$GOV/docs/ddw/reports/tests-GO-1.md" > "$GOV/docs/ddw/reports/tests-GO-2.md"
+GOVOUT="$(python3 "$SELF/ddw/scripts/validate_tests.py" "$GOV/docs/ddw/reports/tests-GO-2.md" 2>/dev/null || true)"
+case "$GOVOUT" in
+  *"❌ F-TEST-04"*"matching"*) ok "a Go report with fabricated coverage cannot earn the tests gate" ;;
+  *) bad "Go's reported statement coverage disagrees with its copied runner output but passed" ;;
 esac
 
 # The floor's SOURCE is read back, not pattern-matched. Measured live
@@ -5629,9 +5672,8 @@ echo '{}' | python3 "$SELF/ddw/scripts/validate-transition.py" --mode post \
 # ── The commit convention, applied to the repository that publishes it ────────
 #
 # DDW requires `AI-assisted: yes` or `AI-full: yes` on every commit made with a
-# model, and forbids Co-Authored-By by name — authorship is where responsibility
-# sits, and a trailer naming the tool as an author spreads it onto something that
-# cannot hold it. That rule governed every repo DDW is installed in and nothing
+# model. A required Co-authored-by trailer may accompany but not replace that
+# disclosure. The rule governed every repo DDW is installed in and nothing
 # here. Driven against real commits, because a checker for git history that is
 # never handed any is a checker of nothing.
 section "The attribution rule holds in this repository too"
@@ -5780,10 +5822,7 @@ python3 "$SELF/scripts/check_commits.py" --repo "$CM" --since "$CM_BASE" >/dev/n
   && ok "an attributed commit passes" \
   || bad "the attribution check rejects a commit that carries the trailer it asks for"
 
-# Carries the right trailer AND the forbidden one, which is the realistic shape:
-# the harness appends Co-Authored-By by default and the author adds the
-# disclosure. Testing it without `AI-assisted` would pass for the other reason —
-# no attribution at all — and the Co-Authored-By rule would go unmeasured.
+# Carries both the disclosure and a model coauthor required by the harness.
 echo three > "$CM/a.txt"; git -C "$CM" add -A
 git -C "$CM" commit -q -F - <<'CMEOF'
 ✨ a change that discloses the help and still names the tool as an author
@@ -5792,15 +5831,19 @@ AI-assisted: yes
 Co-Authored-By: Some Model <noreply@example.com>
 CMEOF
 python3 "$SELF/scripts/check_commits.py" --repo "$CM" --since "$CM_BASE" >/dev/null 2>&1 \
-  && bad "Co-Authored-By passes — the tool is credited as an author and nothing objects" \
-  || ok "and a Co-Authored-By trailer is refused, by the rule DDW ships to everyone else"
+  && ok "and a model coauthor with disclosure is accepted" \
+  || bad "a model coauthor with disclosure was refused"
 
 git -C "$CM" reset -q --hard HEAD~1
 echo four > "$CM/a.txt"; git -C "$CM" add -A
-git -C "$CM" commit -q -m "✨ a change that discloses nothing at all"
+git -C "$CM" commit -q -F - <<'CMEOF'
+✨ a change that names only the model
+
+Co-authored-by: Some Model <noreply@example.com>
+CMEOF
 python3 "$SELF/scripts/check_commits.py" --repo "$CM" --since "$CM_BASE" >/dev/null 2>&1 \
-  && bad "a commit with no attribution trailer at all passes" \
-  || ok "and so is a commit that discloses nothing"
+  && bad "a model coauthor without disclosure passes" \
+  || ok "and a model coauthor cannot replace disclosure"
 
 # A range git cannot read is not a range that passed. This is what a shallow
 # clone produces, and reporting it as success is how the check disappears.
@@ -8434,15 +8477,20 @@ js = open(os.path.join(repo, ".opencode", "plugins", "ddw.js"), encoding="utf-8"
 # under the wrong key it is never called, so nothing ever boots.
 assert '"session.created":' not in js, "opencode: session.created is an event type, not a hook key"
 assert "event:" in js, "opencode: the generic event hook is missing, so the pipeline never boots"
-# opencode.ai/docs/tools: the real ids. `patch` and `multiedit` do not exist.
-assert '"apply_patch"' in js, "opencode: apply_patch is a real write tool and is not gated"
-assert '"multiedit"' not in js and '"patch"' not in js, "opencode: gating tool ids that do not exist"
-assert '"bash"' in js, "opencode: the post net cannot see the shell, which is what forges a state"
+# OpenCode V1 uses apply_patch/bash; V2 calls those patch/shell. Both must
+# reach the same gate, or a V2 patch edits source without ever being judged.
+assert '"apply_patch"' in js, "opencode: V1 apply_patch is not gated"
+assert 'patch: "apply_patch"' in js, "opencode: V2 patch is not mapped to the gate"
+assert 'shell: "bash"' in js, "opencode: V2 shell is not mapped to the commit/post gates"
+assert '"multiedit"' not in js, "opencode: gating a tool id neither runtime has"
 
 oc = json.load(open(os.path.join(src, "adapters", "opencode", "adapter.json"), encoding="utf-8"))
-perm = oc["agents"]["when_readonly"]["permission"]
-# opencode.ai/docs/agents: the permission keys are read/edit/bash/… — no `write`.
-assert "write" not in perm, "opencode: `write` is not a permission key; edit covers it"
+perm = oc["agents"]["when_readonly"]["permissions"]
+# OpenCode V2 reads ordered action/resource/effect rules, not V1 permission keys.
+assert any(p == {"action": "edit", "resource": "*", "effect": "deny"} for p in perm), \
+    "opencode: read-only agents must deny edits through V2 permissions"
+assert any(p == {"action": "shell", "resource": "*", "effect": "ask"} for p in perm), \
+    "opencode: reviewer shell commands must need approval instead of bypassing edit-deny"
 
 # OpenCode discovers skills and never turns them into /name, so without the
 # commands block its seventeen skills load and have no entry point at all. The
@@ -12337,7 +12385,7 @@ import os, re, subprocess, sys, tempfile
 src = sys.argv[1]
 skill = open(os.path.join(src, "skills/ddw-commit/SKILL.md"), encoding="utf-8").read()
 assert "Co-Authored-By" not in skill, \
-    "the template teaches a Co-Authored-By trailer, which scripts/check_commits.py refuses"
+    "the generic template must not invent a model identity"
 m = re.search(r"^AI-assisted:.*$", skill, re.M)
 assert m, "the template no longer carries the attribution trailer at all"
 # Through the checker, not against a string: a commit written the way the skill

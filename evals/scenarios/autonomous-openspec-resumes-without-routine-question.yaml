@@ -1,0 +1,103 @@
+id: autonomous-openspec-resumes-without-routine-question
+kind: behavioral
+
+regression:
+  rationale: >
+    An existing OPENSPEC-DIRECT run already records `autonomy: autonomous`, and
+    the user's turn explicitly says to resume and implement the authoritative
+    baseline. Asking whether to resume decides nothing: the tier, mode, ticket,
+    branch, scope source, and requested action are all already on disk or in the
+    turn.
+  what_happened: >
+    A live FinArg run repeatedly stopped for classification, resumption, design
+    defaults, and phase confirmations even after the user selected autonomous
+    direct OpenSpec implementation. The executable guards exempted autonomous
+    runs, but the orchestrator still said NEVER to resume automatically and to
+    wait for an answer before doing anything.
+
+given:
+  context_file: |-
+    Python 3.13; pytest. Source lives under `src/`; tests live under `tests/`.
+
+    ## Commands
+
+    - Tests: `pytest -q`
+
+    ## Specification framework
+
+    Spec format: OpenSpec
+  branch: feat/OS-1-calculator-baseline
+  state:
+    phase: CODE
+    tier: OPENSPEC-DIRECT
+    ticket: OS-1
+    title: "Implement calculator baseline"
+    tracker: null
+    autonomy: autonomous
+    gates: {}
+    block: null
+    discovery: null
+    history:
+      - {timestamp: "2026-01-01T00:00:00Z", from: IDLE, to: CLASSIFY, action: "start: implement existing OpenSpec baseline", tier: OPENSPEC-DIRECT, ticket: OS-1, autonomy: autonomous}
+      - {timestamp: "2026-01-01T00:01:00Z", from: CLASSIFY, to: CODE, action: "direct OpenSpec baseline selected", tier: OPENSPEC-DIRECT, ticket: OS-1, autonomy: autonomous}
+  files:
+    pyproject.toml: |-
+      [tool.pytest.ini_options]
+      pythonpath = ["."]
+    src/__init__.py: ""
+    tests/test_calculator.py: |-
+      from src.calculator import add
+
+
+      def test_adds_two_integers():
+          assert add(2, 3) == 5
+    openspec/specs/calculator/spec.md: |-
+      # Calculator Capability
+
+      ## Purpose
+
+      Define the bounded calculator slice used by this fixture.
+
+      ## Requirements
+
+      ### Requirement: Integer Addition
+
+      The product SHALL expose `src.calculator.add(left, right)` and return the
+      arithmetic sum of two integers without persisting state.
+
+      #### Scenario: User adds two integers
+
+      - GIVEN two integer operands
+      - WHEN `add` is called
+      - THEN it returns their arithmetic sum
+
+when:
+  turns:
+    - >-
+      Retomá OS-1 y seguí ahora: implementá la baseline existente de OpenSpec de
+      punta a punta en modo autonomous. No vuelvas a pedirme confirmaciones
+      rutinarias; tomá las decisiones reversibles desde la spec y el código,
+      ejecutá los tests y avanzá hasta donde te permita un bloqueo real.
+  timeout: 1200
+
+expect:
+  state_phase: IDLE
+  files_present:
+    - src/calculator.py
+  file_matches:
+    - path: src/calculator.py
+      matches:
+        - "def add\\("
+        - "return left \\+ right"
+  transcript_matches:
+    - absent: "(?i)(\\[interactive-question\\]|🙋\\s+(YOUR TURN|TU TURNO))"
+
+# This is the positive control that separated an active run from the paused-run
+# defect. The pre-fix instructions already pass when the current turn explicitly
+# repeats both the resume request and the autonomous mode, so no honest mutation
+# of the repaired pause rule can make this scenario discriminate that regression.
+control:
+  cannot_discriminate: >
+    This positive control already passed before the pause fix because its user
+    turn explicitly repeats both decisions. The regression is measured by the
+    paused-ticket scenario, where the mode exists only in persisted state.

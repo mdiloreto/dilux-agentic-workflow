@@ -8,8 +8,9 @@ repository is the failure `docs/RATIONALE.md` decision 2 refuses. The numbers in
 the report are the model's account of a run it did.
 
 What stops being optional is the account itself: which runner, the exact command,
-how many tests ran and how many passed, every failure named, coverage stated as
-three numbers against a floor that is quoted rather than invented, and every skip
+how many tests ran and how many passed, every failure named, measured coverage
+against a floor that is quoted rather than invented (or Go statements with an
+explicitly absent project floor), and every skip
 carrying a reason. A run reported as "tests pass" is not a report — it is the
 sentence a gate used to turn true on, and this is the artifact that replaces it.
 
@@ -191,14 +192,49 @@ def main():
     func = _number(text, "Function coverage", "Cobertura de funciones", "Functions", "Function")
     have = [(n, v) for n, v in (("line", line), ("branch", branch), ("function", func))]
     absent = [n for n, v in have if v is None]
-    if absent:
+    floor_raw = _field(text, "Coverage floor", "Piso de cobertura", "Floor")
+    agents = ddw_receipt.find_upward(args.report, "AGENTS.md")
+    testing = ""
+    if agents:
+        project = open(agents, encoding="utf-8", errors="replace").read()
+        section = re.search(r"^## Testing\s*$\n(.*?)(?=^## |\Z)", project,
+                            re.IGNORECASE | re.MULTILINE | re.DOTALL)
+        testing = section.group(1) if section else ""
+    project_has_no_floor = bool(re.search(
+        r"(?:coverage floor|piso de cobertura|cobertura)[^\n]*\bN/A\b", testing,
+        re.IGNORECASE)) and not bool(re.search(
+            r"(?:coverage floor|piso de cobertura|cobertura)[^\n]*\b\d+%", testing,
+            re.IGNORECASE))
+    native_go = bool(re.search(r"^Go\b", runner, re.IGNORECASE) and
+                     re.search(r"\bgo test\b", command) and
+                     re.search(r"(?:^|\s)-cover(?:\s|$)", command))
+    go_no_floor = (native_go and project_has_no_floor and
+                   bool(re.search(r"^N/A\b.*AGENTS\.md", floor_raw, re.IGNORECASE)))
+    if go_no_floor:
+        statement = _number(text, "Statement coverage", "Cobertura de sentencias")
+        output = _field(text, "Go coverage output", "Salida de cobertura Go")
+        measured = re.search(r"coverage:\s*(\d+(?:\.\d+)?)% of statements\b", output)
+        scope = _field(text, "Coverage scope", "Alcance de cobertura")
+        reasons = [
+            _field(text, "Line coverage", "Cobertura de l[ií]neas"),
+            _field(text, "Branch coverage", "Cobertura de ramas"),
+            _field(text, "Function coverage", "Cobertura de funciones"),
+        ]
+        if (statement is None or measured is None or
+                abs(statement - float(measured.group(1))) > 0.05 or not scope or
+                any(not re.match(r"N/A\b.+", reason, re.IGNORECASE) for reason in reasons)):
+            fail("F-TEST-04", "Go statement coverage needs a matching `coverage: N% of statements` "
+                 "runner output, a scope, and explicit N/A reasons for unavailable metrics")
+        else:
+            ok("F-TEST-04", f"statement {statement:.0f}% for {scope}; line, branch and "
+               "function not measured by this Go run")
+    elif absent:
         fail("F-TEST-04", "coverage missing for: " + ", ".join(absent)
                           + ". Three numbers, because one of them hides the other two")
     else:
         ok("F-TEST-04", f"coverage stated: line {line:.0f}%, branch {branch:.0f}%, "
                         f"function {func:.0f}%")
 
-    floor_raw = _field(text, "Coverage floor", "Piso de cobertura", "Floor")
     floor_m = re.search(r"(\d+(?:\.\d+)?)", floor_raw)
     floor = float(floor_m.group(1)) if floor_m else None
     # `0.8` is eighty per cent written as a ratio, and reading it as 0.8% made
@@ -228,7 +264,10 @@ def main():
     # reachable keeps the old benefit of the doubt — every real install has
     # one, so that door is open only to synthetic fixtures, and saying so here
     # beats a guard that looks total and is not.
-    if floor is None:
+    if go_no_floor:
+        ok("F-TEST-05", "no project floor declared in AGENTS.md §Testing; "
+           "the Go statement coverage is reported without an invented threshold")
+    elif floor is None:
         fail("F-TEST-05", "the report states no coverage floor, so nothing decides whether these "
                           "numbers are good enough. Quote the project's, from AGENTS.md or the spec")
     elif re.search(r"testing\.instructions\.md|method default|default del m[eé]todo", floor_raw):
@@ -306,8 +345,8 @@ def main():
     print(f"Total: {passed_rows} passed, {fails} failed, {warns} warnings")
     print(f"Result: {verdict}")
     print("Scope: DDW does NOT run your suite. This checks the REPORT of the run you did — the "
-          "runner and command\n       named, the counts adding up, failures identified, three "
-          "coverage numbers against a quoted floor,\n       skips explained. The numbers remain "
+          "runner and command\n       named, the counts adding up, failures identified, measured "
+          "coverage against a sourced floor or the Go exception,\n       skips explained. The numbers remain "
           "your model's account. A complete report can still be a false one.")
 
     try:

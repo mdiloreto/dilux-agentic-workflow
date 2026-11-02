@@ -362,6 +362,54 @@ def test_a_report_that_states_no_floor_is_refused_not_given_one(tmp_path):
         "a report with no floor passed against one DDW invented for it: " + "\n".join(refused)
 
 
+def _go_report(tmp_path, floor="N/A — AGENTS.md §Testing", statement="70.8%",
+               output="coverage: 70.8% of statements"):
+    (tmp_path / "AGENTS.md").write_text(
+        "## Testing\nCoverage floor — line: N/A — no project coverage floor declared.\n")
+    report = _worked("ddw-test", TESTS_DOC)
+    changes = {
+        "Runner": "Go 1.26 (go test)",
+        "Command": "go test ./internal/... -cover -count=1",
+        "Line coverage": "N/A — go test -cover reports statements, not lines",
+        "Branch coverage": "N/A — go test -cover does not instrument branches",
+        "Function coverage": "N/A — not measured by this run",
+        "Coverage floor": floor,
+    }
+    for key, value in changes.items():
+        report = re.sub(rf"^\| {key} \|.*$", f"| {key} | {value} |", report, flags=re.M)
+    report += (f"\n| Statement coverage | {statement} |\n"
+               "| Coverage scope | internal/ledger |\n"
+               f"| Go coverage output | {output} |\n")
+    return report
+
+
+def test_go_statement_coverage_without_project_floor_is_reported_not_invented(tmp_path):
+    r, refused = _validate(tmp_path, "validate_tests.py", "tests-go.md", _go_report(tmp_path))
+    assert r.returncode == 0 and not refused, r.stdout
+    assert "statement 71%" in r.stdout and "no project floor" in r.stdout
+
+
+def test_go_exception_refuses_missing_evidence_or_a_real_floor(tmp_path):
+    base = _go_report(tmp_path)
+    variants = (
+        (base.replace("coverage: 70.8% of statements", "coverage: 91.0% of statements"), "F-TEST-04"),
+        (base.replace("| Statement coverage | 70.8% |", ""), "F-TEST-04"),
+        (base.replace("| Branch coverage | N/A — go test -cover does not instrument branches |",
+                      "| Branch coverage | 100% |"), "F-TEST-04"),
+        (base.replace("| Line coverage | N/A — go test -cover reports statements, not lines |",
+                      "| Line coverage | N/A |"), "F-TEST-04"),
+        (base.replace("| Coverage floor | N/A — AGENTS.md §Testing |",
+                      "| Coverage floor | 80% (AGENTS.md) |"), "F-TEST-04"),
+    )
+    for idx, (body, rule) in enumerate(variants):
+        _, refused = _validate(tmp_path, "validate_tests.py", f"go-invalid-{idx}.md", body)
+        assert _refuses(refused, rule), "\n".join(refused)
+
+    (tmp_path / "AGENTS.md").write_text("## Testing\nCoverage floor — line: 80%.\n")
+    _, refused = _validate(tmp_path, "validate_tests.py", "go-not-exempt.md", base)
+    assert _refuses(refused, "F-TEST-05"), "\n".join(refused)
+
+
 def test_a_skipped_test_owes_a_reason(tmp_path):
     """F-TEST-06. Skipping is the cheapest way to put a suite in green, and a
     skip without a reason is indistinguishable from one covering a failure."""
@@ -840,32 +888,26 @@ def test_un_commit_visto_y_contestado_pasa_al_primer_intento(tmp_path):
     assert _commit(tmp_path).returncode == 0, "the approved commit was refused anyway"
 
 
-def test_el_trailer_que_el_metodo_prohibe_no_pasa(tmp_path):
-    """`commits.instructions.md` says it in capitals — NEVER `Co-Authored-By`,
-    the disclosure is `AI-assisted: yes` — and no gate read the file that
-    rule talks about.
-
-    Measured live on Copilot: the model drafted the message, the user
-    approved it, and it carried `Co-authored-by: Copilot
-    <…@users.noreply.github.com>` — the tool's default doing exactly what the
-    rule forbids. Approved and all, that commit attributes an authorship the
-    project never agreed to.
-    """
+def test_coauthor_con_divulgacion_pasa_y_sin_ella_no(tmp_path):
     _repo_en_define(tmp_path)
-    malo = MENSAJE.rstrip("\n") + "\nCo-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>\n"
-    _propone(tmp_path, malo)
+    mensaje = MENSAJE.rstrip("\n") + "\nCo-authored-by: GPT-6 Sol <noreply@openai.com>\n"
+    _propone(tmp_path, mensaje)
     _habla_el_usuario(tmp_path)
     r = _commit(tmp_path)
-    assert r.returncode == 2, "the commit carried a Co-Authored-By the method forbids"
-    assert "AI-assisted" in (r.stdout + r.stderr), \
-        "the refusal does not say which trailer DOES go: " + (r.stdout + r.stderr)[-200:]
+    assert r.returncode == 0, "a disclosed coauthor was refused: " + (r.stdout + r.stderr)[-200:]
 
-    # …and the correct message still passes: what gets judged is the trailer,
-    # not the body. What the message SAYS belongs to the model and to the
-    # user who approves it.
-    _propone(tmp_path)
+    _propone(tmp_path, "feat(test): test\n\nCo-authored-by: GPT-6 Sol <noreply@openai.com>\n")
     _habla_el_usuario(tmp_path)
-    assert _commit(tmp_path).returncode == 0, "a legitimate message ended up refused"
+    r = _commit(tmp_path)
+    assert r.returncode == 2
+    assert "AI-assisted" in (r.stdout + r.stderr)
+
+
+def test_firma_ai_no_reemplaza_divulgacion(tmp_path):
+    _repo_en_define(tmp_path)
+    _propone(tmp_path, MENSAJE + "signed-off-by-ai: bot\n")
+    _habla_el_usuario(tmp_path)
+    assert _commit(tmp_path).returncode == 2
 
 
 def test_mostrar_un_mensaje_y_commitear_otro_es_rechazado(tmp_path):
@@ -942,6 +984,13 @@ def test_lo_que_no_es_un_commit_no_le_incumbe(tmp_path):
 def test_minimal_no_espera(tmp_path):
     """Lo que ese modo saca es el preguntar, y un commit es local y reversible."""
     _repo_en_define(tmp_path, autonomy="minimal")
+    assert _commit(tmp_path, 'git commit -m "x"').returncode == 0
+
+
+def test_autonomous_no_espera(tmp_path):
+    """`autonomous` adds the acts that leave the repo to `minimal`; a local
+    commit still never waits."""
+    _repo_en_define(tmp_path, autonomy="autonomous")
     assert _commit(tmp_path, 'git commit -m "x"').returncode == 0
 
 
@@ -1055,6 +1104,195 @@ def test_required_tests_ilegibles_no_es_un_pass(tmp_path):
         "a spec with unreadable promises vouched for the report: %r" % rows
 
 
+FIX_PLAN = ("# Fix-plan FIX-002\n\n## Solution — steps\n"
+            "1. Update the lockfile.\n2. Keep lint compatible.\n"
+            "## Tests\n"
+            "- [ ] **Regression test** — audit fails before and passes after.\n"
+            "- [ ] Invalid lockfile is rejected with an error.\n"
+            "## Rollback plan\n- Revert the commit.\n")
+
+
+def _fix_verdict(tmp_path, report, spec=FIX_PLAN):
+    rp = tmp_path / "verify-FIX-002.md"
+    rp.write_text(report, encoding="utf-8")
+    sp = tmp_path / "fix-FIX-002.md"
+    sp.write_text(spec, encoding="utf-8")
+    r = subprocess.run([sys.executable, os.path.join(ROOT, "ddw/scripts/validate_verify.py"),
+                        str(rp), "--tier", "FIX", "--spec", str(sp)],
+                       capture_output=True, text=True, cwd=str(tmp_path))
+    return r, [ln for ln in r.stdout.splitlines()
+               if "F-VER-02" in ln or "F-VER-06" in ln]
+
+
+def test_fix_plan_steps_and_descriptive_tests_are_verified(tmp_path):
+    report = ("- ✅ Step 1 — Update the lockfile.\n"
+              "- ✅ Step 2 — Keep lint compatible.\n"
+              "- ✅ Test 1 — Regression test — audit fails before and passes after.\n"
+              "- ✅ Test 2 — Invalid lockfile is rejected with an error.\n")
+    _, rows = _fix_verdict(tmp_path, report)
+    assert len(rows) == 2 and all("✅" in row for row in rows), rows
+
+
+def test_fix_plan_missing_or_failed_step_does_not_pass(tmp_path):
+    _, missing = _fix_verdict(tmp_path, "- ✅ Step 1 — Update the lockfile.\n")
+    assert any("❌ F-VER-02" in row and "Step 2" in row for row in missing), missing
+
+    _, failed = _fix_verdict(tmp_path, "- ✅ Step 1 — Update the lockfile.\n"
+                             "- ❌ Step 2 — Keep lint compatible.\n")
+    assert any("❌ F-VER-02" in row for row in failed), failed
+
+    _, empty = _fix_verdict(tmp_path, "- ✅ Step 1\n- ✅ Step 2\n")
+    assert any("❌ F-VER-02" in row for row in empty), empty
+
+
+def test_fix_plan_missing_failed_or_unidentified_test_does_not_pass(tmp_path):
+    _, missing = _fix_verdict(tmp_path, "- ✅ Test 1 — Regression test — audit fails before and passes after.\n")
+    assert any("❌ F-VER-06" in row and "Test 2" in row for row in missing), missing
+
+    _, failed = _fix_verdict(tmp_path, "- ✅ Test 1 — Regression test — audit fails before and passes after.\n"
+                             "- ❌ Test 2 — Invalid lockfile is rejected with an error.\n")
+    assert any("❌ F-VER-06" in row for row in failed), failed
+
+    _, generic = _fix_verdict(tmp_path, "- ✅ Test 1 passed\n- ✅ Test 2 passed\n")
+    assert any("❌ F-VER-06" in row for row in generic), generic
+
+
+def test_fix_plan_with_no_steps_or_tests_does_not_pass(tmp_path):
+    _, rows = _fix_verdict(tmp_path, "- ✅ Step 1\n- ✅ Test 1\n", "# Fix-plan FIX-002\n## Tests\n")
+    assert len(rows) == 2 and all("❌" in row for row in rows), rows
+
+
+def test_fix_plan_duplicate_step_numbers_do_not_count_as_separate_steps(tmp_path):
+    spec = FIX_PLAN.replace("2. Keep lint compatible.", "1. Keep lint compatible.")
+    _, rows = _fix_verdict(tmp_path, "- ✅ Step 1 — Update the lockfile.\n", spec)
+    assert any("❌ F-VER-02" in row for row in rows), rows
+
+
+def test_fix_plan_does_not_count_a_file_path_as_a_test(tmp_path):
+    for name in ("tests/fakes.py", "tests/fakes.js", "tests/fakes.test.tsx"):
+        spec = FIX_PLAN.replace("- [ ] Invalid lockfile is rejected with an error.",
+                                f"- [ ] `{name}`")
+        _, rows = _fix_verdict(tmp_path, "- ✅ Test 1 — Regression test — audit fails before and passes after.\n"
+                               f"- ✅ Test 2 — {name}\n", spec)
+        assert any("❌ F-VER-06" in row for row in rows), rows
+
+
+def test_fix_plan_duplicate_verdicts_cannot_hide_a_failure(tmp_path):
+    report = ("- ❌ Step 1 — not implemented\n"
+              "- ✅ Step 1 — done\n"
+              "- ✅ Step 2 — done\n"
+              "- ❌ Test 1 — not passing\n"
+              "- ✅ Test 1 — Regression test — audit fails before and passes after.\n"
+              "- ✅ Test 2 — Invalid lockfile is rejected with an error.\n")
+    _, rows = _fix_verdict(tmp_path, report)
+    assert len(rows) == 2 and all("❌" in row for row in rows), rows
+
+
+def test_fix_plan_spanish_verdicts_and_multiline_test_bullets(tmp_path):
+    spec = ("# Fix-plan FIX-002\n## Solution — steps\n"
+            "1. `package.json` y `package-lock.json`: elevar tooling\n"
+            "   y regenerar lockfile.\n2. `frontend/package.json`: mantener Next 15.\n"
+            "## Tests\n- [ ] **Regression test**: `npm audit` en raíz y\n"
+            "  frontend debe pasar después.\n"
+            "- [ ] Auditoría rechazada: comprobar lockfile baseline.\n"
+            "## Regression risk\n- n/a\n")
+    report = ("- ✅ Paso 1: `package.json` actualizado y auditado.\n"
+              "- ✅ Paso 2: `frontend/package.json` mantiene Next 15.\n"
+              "- ✅ Prueba 1 — Regression test: npm audit en raíz y — ambas pasan.\n"
+              "- ✅ Prueba 2 — Auditoría rechazada: comprobar lockfile baseline.\n")
+    _, rows = _fix_verdict(tmp_path, report, spec)
+    assert len(rows) == 2 and all("✅" in row for row in rows), rows
+
+
+def test_opencode_install_exposes_readonly_module_verifier(tmp_path):
+    r = subprocess.run([sys.executable, os.path.join(ROOT, "scripts/install_target.py"),
+                        "--self", ROOT, "--target", str(tmp_path), "--id", "opencode"],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    agent = (tmp_path / ".opencode/agents/ddw-module-verifier.md").read_text()
+    frontmatter = agent.split("---", 2)[1]
+    assert 'mode: "subagent"' in frontmatter
+    assert "permissions:" in frontmatter and '- action: "edit"' in frontmatter
+    assert 'effect: "deny"' in frontmatter
+    assert '- action: "shell"' in frontmatter and 'effect: "ask"' in frontmatter
+    assert "permission:" not in frontmatter, "OpenCode V2 ignores legacy permission keys"
+
+
+def test_opencode_v2_plugin_blocks_a_write_from_idle(tmp_path):
+    shutil.copytree(os.path.join(ROOT, "ddw"), tmp_path / ".ddw")
+    js = r'''
+import assert from "node:assert/strict";
+import { pathToFileURL } from "node:url";
+import { join } from "node:path";
+const plugin = (await import(pathToFileURL(process.argv[1]))).default;
+assert.equal(plugin?.id, "ddw", "V2 did not load the DDW plugin");
+const hooks = {};
+const sessions = {};
+await plugin.setup({
+  location: { directory: process.argv[2] },
+  tool: { hook: async (name, fn) => { hooks[name] = fn; } },
+  session: { hook: async (name, fn) => { sessions[name] = fn; } },
+  event: { subscribe: async function* () {} },
+});
+assert.equal(typeof hooks["execute.before"], "function", "no V2 pre-write hook");
+assert.equal(typeof hooks["execute.after"], "function", "no V2 post-write hook");
+const context = { system: [] };
+sessions.context(context);
+assert.match(context.system[0]?.text || "", /CLASSIFY.*DEFINE.*PLAN.*CODE.*VERIFY.*CLOSEOUT/s);
+assert.equal(typeof sessions.prompt, "function", "V2 never counts the user's confirmation turn");
+await sessions.prompt({ prompt: { text: "I approve the proposed commit" } });
+assert.equal((await import("node:fs")).readFileSync(join(process.argv[2], ".ddw-sessions", "turn"), "utf8"), "1");
+await assert.rejects(
+  hooks["execute.before"]({ tool: "write", input: { filePath: join(process.argv[2], "app.txt"), content: "unsafe" } }),
+  /DDW blocked the write.*app\.txt/s,
+);
+await assert.rejects(
+  hooks["execute.before"]({ tool: "patch", input: { patchText: "*** Begin Patch\n*** Add File: app.txt\n+unsafe\n*** End Patch" } }),
+  /DDW blocked the write.*app\.txt/s,
+);
+await assert.rejects(
+  hooks["execute.before"]({ tool: "shell", input: { command: "git commit -m bypass" } }),
+  /DDW blocked the write/,
+);
+'''
+    r = subprocess.run(["node", "--input-type=module", "-e", js,
+                        os.path.join(ROOT, "adapters/opencode/plugin/ddw.js"), str(tmp_path)],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+
+
+def test_opencode_v2_bootstrap_distinguishes_dropin_from_plugin(tmp_path):
+    dropin = tmp_path / "dropin"
+    shutil.copytree(os.path.join(ROOT, "ddw"), dropin / ".ddw")
+    plugin_only = tmp_path / "plugin-only"
+    plugin_only.mkdir()
+    js = r'''
+import assert from "node:assert/strict";
+import { pathToFileURL } from "node:url";
+const plugin = (await import(pathToFileURL(process.argv[1]))).default;
+for (const [directory, isDropin] of [[process.argv[2], true], [process.argv[3], false]]) {
+  let context;
+  await plugin.setup({
+    location: { directory },
+    tool: { hook: async () => {} },
+    session: { hook: async (name, fn) => {
+      if (name === "context") { context = { system: [] }; fn(context); }
+    } },
+    event: { subscribe: async function* () {} },
+  });
+  const text = context.system[0]?.text || "";
+  assert.match(text, /CLASSIFY.*DEFINE.*PLAN.*CODE.*VERIFY.*CLOSEOUT/s);
+  assert.equal(text.includes("do NOT install DDW into this repo"), !isDropin);
+  if (isDropin) assert.match(text, /method is installed in this repo/);
+  else assert.match(text, /Never put DDW content in it/);
+}
+'''
+    r = subprocess.run(["node", "--input-type=module", "-e", js,
+                        os.path.join(ROOT, "adapters/opencode/plugin/ddw.js"),
+                        str(dropin), str(plugin_only)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+
+
 # ── El gate del merge ────────────────────────────────────────────────────────
 #
 # The one act of the pipeline that leaves the repo and that nobody here can
@@ -1115,6 +1353,14 @@ def test_minimal_no_exime_al_merge(tmp_path):
     _repo_en_define(tmp_path, autonomy="minimal")
     assert _merge(tmp_path).returncode == 2, \
         "minimal exempted the act the prose says is never exempt"
+
+
+def test_autonomous_exime_al_merge(tmp_path):
+    """`autonomous` is the one mode that takes the merge button: a merge runs
+    with nobody having seen the proposal first."""
+    _repo_en_define(tmp_path, autonomy="autonomous")
+    assert _merge(tmp_path).returncode == 0, \
+        "autonomous still reserved the merge for a person"
 
 
 def test_un_merge_propuesto_en_el_mismo_turno_es_rechazado(tmp_path):

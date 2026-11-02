@@ -149,24 +149,26 @@ When the user wants to pause the current ticket:
 When the user wants to resume a paused ticket:
 1. List the paused tickets in `.ddw-paused/`.
 2. The user picks which one to resume.
-3. **Ask about the mode, before restoring anything.** `autonomy` does NOT come back on its own: it
-   is the setting that decides whether a person is asked before each step, and days have passed.
-   Read what the ticket was walked under — the last history entry of that ticket carrying
-   `"autonomy": "minimal"`, and `assisted` if there is none — and put it to the user:
-
-   > This ticket was running in `minimal` (no confirmation between steps). Two days have passed.
-   > Keep it, or go back to confirming each step?
-
-   Their answer is what you pass as `--autonomy` on the resume. Resuming is the only edge outside
-   CLASSIFY where that field may be set, and it may only be set by asking — the hook can see that a
-   real pause is being resumed, it cannot see whether you asked. Do not skip the question because
-   the previous value was `minimal`; that is exactly the answer that needs re-confirming.
-4. Restore the saved metadata — `tier`, `ticket`, `title`, `tracker`, `block`, `gates` — into the
-   CURRENT `.ddw-state.json`, and append a `IDLE → <phase>` entry with
+3. Resolve the mode before restoring anything. Read `autonomy` from the selected paused snapshot
+   (absent or `null` means `"assisted"`) and cross-check it against that ticket's latest unresolved
+   `pause:` entry in the CURRENT history. The two records must agree; a mismatch is corrupt state,
+   so stop and report it rather than choosing whichever value grants more permission.
+   - **If the saved mode is exactly `"autonomous"`, restore it without asking.** The mode was
+     explicitly chosen for this ticket and persisted in both records; selecting that ticket and
+     asking to resume it is the continuation request, not a new ticket inheriting a preference.
+     Pass `--autonomy autonomous` on the resume.
+   - **For `"assisted"`, `"minimal"`, or an absent mode, ask which mode to use.** Show the saved
+     mode and offer `assisted`, `minimal`, and `autonomous`; pass the answer as `--autonomy` on the
+     resume. **Do not infer `"autonomous"`** from elapsed time, task size, or the desire to avoid a
+     question. It must either be the exact persisted mode or a new explicit answer from the user.
+4. Restore the saved metadata — `tier`, `ticket`, `title`, `tracker`, `block`, `gates` — and the
+   resolved `autonomy` into the CURRENT `.ddw-state.json`, and append a `IDLE → <phase>` entry with
    `action: "resume: <ticket>"`. **Never overwrite the file with the saved copy:** its `history` is
    shorter than the one on disk, and history is append-only — restoring it wholesale reads as a
    truncation and gets refused.
-5. Run the normal "work in progress" flow (propose, do not auto-resume).
+5. Continue according to the resolved mode. Under `autonomous`, do not show the normal
+   "work in progress" picker: the user's resume request already answered it, so chain until one of
+   the three stops in *Autonomy*. Under `assisted` and `minimal`, follow their normal approval rules.
 
 ## Self-Check before write actions
 
@@ -324,25 +326,34 @@ receipts, refused by the same hook over the same bytes. What goes away is asking
 approve a transition whose evidence is already on disk, which is a rubber stamp, and rubber stamps
 are how approvals come to mean nothing.
 
+**`autonomous`** — `minimal`, plus the acts `minimal` still reserves for a person. An autonomous
+run takes every arrow AND the acts that leave the repository: it commits, pushes, merges, and closes
+the tracker ticket without asking, inheriting every `minimal` exemption the phase rules already
+name. Everything else is the same: the eight gates are earned by receipts and refused by the same
+hook over the same bytes, so a run with nobody watching is still held to the same evidence. It is
+chosen by name ("corré completamente solo", "sin preguntarme nada", "sin restricción"), never
+inferred, and its cost is stated once in CLASSIFY.
+
 **Stopping is what goes away, not only asking.** An arrow that waits for a message it does not need
-is the same interruption under another name, so under `minimal` the arrows CHAIN: one response
-carries as many as the work reaches, each written on its own, each with its evidence on disk. The
-hook agrees — `second_arrow_in_one_turn` exempts this mode from the one-arrow-per-turn
-refusal by name, and the commit gate does the same.
+is the same interruption under another name, so under `minimal` and `autonomous` the arrows CHAIN:
+one response carries as many as the work reaches, each written on its own, each with its evidence
+on disk. The hook agrees — `second_arrow_in_one_turn` exempts both modes from the
+one-arrow-per-turn refusal by name, and the commit gate does the same.
 
 **What `minimal` does NOT touch: acts that leave the repository.** Merging a pull request and
 closing a tracker ticket are not arrows in this graph — they are irreversible things done to systems
 other people read, and no receipt attests that the user wanted them. They keep their confirmation in
-both modes, and the skills that perform them say so. `minimal` removes the pause on a transition
-whose evidence is already on disk; it does not hand the model the merge button.
+`assisted` and `minimal`, and the skills that perform them say so. `minimal` removes the pause on a
+transition whose evidence is already on disk; it does not hand the model the merge button.
+`autonomous` does — that is the one thing it adds, and the one reason it is a heavier choice.
 
 **And the gates are earned by their receipts, not by the approval.** `gates.define` turns true
 because `validate_prd.py` passed and left a receipt bound to those bytes — the approval was never
 what made it true, which is why removing the approval leaves the gate chain intact. A skill that
 says "set the gate once the user approves" means "once the validation passed and you showed them";
-under `minimal` the showing still happens and the asking does not.
+under `minimal` and `autonomous` the showing still happens and the asking does not.
 
-**Stop and ask anyway, in either mode:**
+**Stop and ask anyway, in every mode:**
 
 1. **A decision nobody wrote down.** A ❌ the script names is a defect to fix; a question born of
    missing information is not. Inventing a requirement, a criterion or a threshold to clear a check
@@ -352,9 +363,10 @@ under `minimal` the showing still happens and the asking does not.
    record.
 3. **A corrupt state.** Unchanged: stop, report, repair nothing.
 
-**Every transition taken without a human carries `"autonomy": "minimal"` in its history entry.** A
-record that reads identically for a run somebody watched and one that had nobody to watch it is a
-record that lies by omission — and this is the one field that says which happened.
+**Every transition taken without a human carries `"autonomy": "minimal"` or `"autonomy":
+"autonomous"` in its history entry.** A record that reads identically for a run somebody watched
+and one that had nobody to watch it is a record that lies by omission — and this is the one field
+that says which happened.
 - DDW's skills and any the project brings coexist in `.claude/skills/`. **NEVER invoke a skill that
   is not listed in the active phase's router**, whether it belongs to DDW or to the project. If the
   project ships a skill with the SAME name as one of DDW's, that is ambiguous: tell the user and ask
@@ -472,12 +484,20 @@ refusing to ship.
   `/ddw-commit`, `/ddw-self-check`, `/ddw-status`
 - **Agents:** `ddw-implementer`, `ddw-module-verifier`, `ddw-arch-auditor`, `ddw-sec-auditor`
 - **Blocked:** modifying the PRD. Modifying specs. Committing before tests+SAST are green. PRs.
-- **Status line:** `💻 {TIER} · Implementing [3/5] · Block {n}/{total} | {ticket}: {title}`
+- **Status line:** `💻 {TIER} · Implementing [3/5] · Block {n}/{total} | {ticket}: {title}` for FEATURE; `💻 OPENSPEC-DIRECT · Implementing | {ticket}: {title}` in the direct lane.
 - **FIRST action:** `/ddw-validate-arch` BEFORE writing code.
-- **Per block:** dispatch `ddw-implementer`, then review in two stages (`ddw-module-verifier` for
+- **Per FEATURE block:** dispatch `ddw-implementer`, then review in two stages (`ddw-module-verifier` for
   spec compliance, `ddw-arch-auditor` for quality). Details in `.ddw/rules/code.instructions.md`.
 - **On finishing:** `/ddw-test` → PASS + `/ddw-security-sast` → PASS (BLOCKING GATE).
-- **Exit:** `tests` and `sast` gates present + user confirms (not under `minimal` — see § Autonomy) → `phase`→`VERIFY`.
+- **Exit:** `tests` and `sast` gates present + user confirms (not under `minimal` — see § Autonomy) → `phase`→`VERIFY` for FEATURE/FIX or `CLOSEOUT` for OPENSPEC-DIRECT.
+
+**When tier is `OPENSPEC-DIRECT`:** read every `openspec/specs/*/spec.md`, inventory
+implemented versus outstanding requirements and implement only the ticket's
+selected slice. Skip DEFINE, PLAN and VERIFY: no DAW PRD, proposed OpenSpec
+change, DAW execution spec, spec validator or module-verifier is owed. Use the
+direct-tier section of `code.instructions.md`; keep `ddw-validate-arch`,
+`ddw-test` and `ddw-security-sast`. The graph permits CODE→CLOSEOUT only after
+the `tests` and `sast` gates. Do not claim `define`, `spec`, `threat` or `verify`.
 
 ---
 

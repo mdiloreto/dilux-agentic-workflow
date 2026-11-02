@@ -269,8 +269,8 @@ def build_next_state(old_state, to_phase, action, gates, tier, clear_gates=(),
     # lies by omission — and this is the only place that distinction can live,
     # because the header resets when the ticket closes.
     run_auto = new_state.get("autonomy") or old_state.get("autonomy")
-    if run_auto == "minimal":
-        entry["autonomy"] = "minimal"
+    if run_auto in ("minimal", "autonomous"):
+        entry["autonomy"] = run_auto
     history.append(entry)
     new_state["history"] = history
     return new_state
@@ -430,7 +430,10 @@ def main():
                     help="Gate to drop (repeatable). The corrective loop VERIFY->CODE clears "
                          "tests and sast: the fix has to re-earn them.")
     ap.add_argument("--tier", choices=_tiers(), default=None,
-                    help="Tier of the work (enum). The only metadata the FSM needs to route the graph.")
+                     help="Tier of the work (enum). The only metadata the FSM needs to route the graph.")
+    ap.add_argument("--direct-openspec", action="store_true",
+                    help="From CLASSIFY, implement the existing openspec/specs/ baseline directly "
+                         "without DEFINE, PLAN, or spec validation. Tests and SAST remain gated.")
     ap.add_argument("--ticket", default=None,
                     help="The ticket this run belongs to. Set it on the edge that classifies the "
                          "request; a gate cannot be claimed without one, because the ticket is "
@@ -441,7 +444,7 @@ def main():
                          "the model remembering it.")
     ap.add_argument("--tracker", default=None,
                     help="The tracker ticket this run belongs to, when there is one.")
-    ap.add_argument("--autonomy", choices=("assisted", "minimal"), default=None,
+    ap.add_argument("--autonomy", choices=("assisted", "minimal", "autonomous"), default=None,
                     help="How much of the run waits for the user. Set in CLASSIFY, with the user "
                          "looking at the box; the hook refuses a change anywhere else. Absent "
                          "leaves whatever the state carries, and absent there means assisted.")
@@ -465,6 +468,12 @@ def main():
     args = ap.parse_args()
     if args.state is None:
         args.state = _default_state()
+    if args.direct_openspec:
+        if args.to != "CODE" or args.tier not in (None, "OPENSPEC-DIRECT"):
+            ap.error("--direct-openspec requires --to CODE and no other tier")
+        args.tier = "OPENSPEC-DIRECT"
+    elif args.tier == "OPENSPEC-DIRECT":
+        ap.error("OPENSPEC-DIRECT requires --direct-openspec")
 
     block_given = args.block is not None
     block_val = None
