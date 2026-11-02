@@ -2914,6 +2914,17 @@ def decide_pre(state_path, graph_path, tool_name, tool_input, paths, repo=None, 
         reason = source_write_denied(target, root, phase)
         if reason:
             return reason
+        if lexical != target:
+            reason = source_write_denied(lexical, root, phase)
+            if reason:
+                return reason
+            if phase in NO_SOURCE_PHASES and not _outside_repo(lexical, root):
+                if _outside_repo(target, root):
+                    rel = os.path.relpath(lexical, root).replace(os.sep, "/")
+                    return (
+                        f"`{rel}` resolves outside the repository through a symlink; "
+                        f"an allowed {phase} path must stay inside the repository"
+                    )
         reason = quickfix_scope_denied(target, root, disk)
         if reason:
             return reason

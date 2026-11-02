@@ -3724,6 +3724,10 @@ MUTATIONS = [
           '        if links != 1:\n'
           '            return f"`{rel}` has multiple hard links; refusing the write during PLAN"\n',
           "")),
+    ("an allowed OpenSpec planning path escapes the repository through a symlink",
+     edit("ddw/scripts/validate-transition.py",
+          '                if _outside_repo(target, root):',
+          '                if False:')),
 ]
 
 
