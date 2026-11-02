@@ -159,6 +159,25 @@ def test_planning_paths_cannot_alias_product_source(project, directory_link):
     assert "`src/" in result.stdout
 
 
+@pytest.mark.parametrize("directory_link", [False, True])
+def test_planning_paths_cannot_alias_outside_the_repo(project, directory_link):
+    outside = project.parent / f"{project.name}-outside"
+    outside.mkdir()
+    change = project / "openspec/changes/add-ledger"
+    change.mkdir(parents=True)
+    if directory_link:
+        (change / "specs").symlink_to(outside, target_is_directory=True)
+        path = "openspec/changes/add-ledger/specs/ledger/spec.md"
+    else:
+        target = outside / "proposal.md"
+        target.write_text("before\n", encoding="utf-8")
+        (change / "proposal.md").symlink_to(target)
+        path = "openspec/changes/add-ledger/proposal.md"
+    result = call_patch_hook(project, [path], update=not directory_link)
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "outside the repository" in result.stdout
+
+
 def test_hardlinked_planning_document_cannot_change_source(project):
     source = project / "src/app.py"
     source.parent.mkdir()
